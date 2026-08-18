@@ -105,6 +105,41 @@ local function clear()
   backend.reset() -- drop pending results + reset the AI Mode conversation
 end
 
+local function clear_input()
+  if buf_valid(state.input_buf) then
+    vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { '' })
+  end
+end
+
+-- The text of the most recent user question, or nil if there is none yet.
+local function last_query()
+  for i = #state.messages, 1, -1 do
+    if state.messages[i].role == 'you' then return state.messages[i].text end
+  end
+  return nil
+end
+
+-- Append a new turn for `text` and send it to the backend.
+local function send_query(text)
+  table.insert(state.messages, { role = 'you', text = text })
+  table.insert(state.messages, { role = 'ai', text = '' })
+  state.awaiting = true
+  redraw()
+  scroll_new_turn_to_top() -- put the new question at the top; answer fills below
+
+  backend.query(text, {
+    on_chunk = function(t) set_last_ai(t) end,
+    on_done = function(t)
+      set_last_ai(t)
+      state.awaiting = false
+    end,
+    on_error = function(msg)
+      set_last_ai('⚠ ' .. msg)
+      state.awaiting = false
+    end,
+  })
+end
+
 local function submit()
   if not buf_valid(state.input_buf) then return end
   local raw = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
@@ -123,26 +158,21 @@ local function submit()
     return
   end
 
-  -- Clear input.
-  vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { '' })
+  -- Slash command: /retry re-asks the last question as a new turn.
+  local rc = config.options.retry_command
+  if rc and rc ~= '' and text == rc then
+    local q = last_query()
+    clear_input()
+    if not q then
+      vim.notify('[nam] nothing to retry yet', vim.log.levels.WARN)
+      return
+    end
+    send_query(q)
+    return
+  end
 
-  table.insert(state.messages, { role = 'you', text = text })
-  table.insert(state.messages, { role = 'ai', text = '' })
-  state.awaiting = true
-  redraw()
-  scroll_new_turn_to_top() -- put the new question at the top; answer fills below
-
-  backend.query(text, {
-    on_chunk = function(t) set_last_ai(t) end,
-    on_done = function(t)
-      set_last_ai(t)
-      state.awaiting = false
-    end,
-    on_error = function(msg)
-      set_last_ai('⚠ ' .. msg)
-      state.awaiting = false
-    end,
-  })
+  clear_input()
+  send_query(text)
 end
 
 local function focus_input()

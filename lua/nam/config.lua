@@ -34,6 +34,8 @@ M.defaults = {
   -- Slash command (typed in the input box) that clears the chat window and starts
   -- a fresh AI Mode conversation. Set to false/'' to disable.
   clear_command = '/clear',
+  -- Slash command that re-asks the last question. Set to false/'' to disable.
+  retry_command = '/retry',
 
   -- How nam gets the user's Firefox into debug mode. Firefox's remote agent is
   -- startup-only, so nam (re)launches Firefox with --remote-debugging-port when

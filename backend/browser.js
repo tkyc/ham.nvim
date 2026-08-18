@@ -104,12 +104,34 @@ async function connect(config) {
   }
 }
 
-// Return a fresh tab for nam to drive. The backend caches this page for the whole
-// session, so this runs once. We deliberately create our OWN tab rather than
-// reusing an existing AI Mode tab, so nam never hijacks a conversation the user
-// already has open (and a fresh tab avoids the known puppeteer<->firefox goto hang
-// on the initially-attached page).
+// DOM/URL markers that identify a Google AI Mode page. The udm=50 query param can
+// disappear from the URL after interaction, so we also sniff AI Mode's DOM.
+const AI_MODE_DOM = '[data-subtree="aimc"], #aim-mars-input-plate, '
+  + 'textarea[placeholder="Ask anything"], [data-xid="aim-mars-turn-root"]';
+
+async function isAiModePage(page) {
+  let url = '';
+  try { url = page.url() || ''; } catch (_) { return false; }
+  if (/[?&]udm=50\b/.test(url)) return true; // fast path: AI Mode URL
+  // Otherwise sniff the DOM (udm=50 can drop from the URL after interaction). Skip
+  // schemes that can't be AI Mode and may not be evaluable (about:, chrome:, …).
+  if (!/^(https?|data):/.test(url)) return false;
+  try {
+    return await page.evaluate((sel) => !!document.querySelector(sel), AI_MODE_DOM);
+  } catch (_) {
+    return false; // page not evaluable (still loading / restricted)
+  }
+}
+
+// Return a tab for nam to drive (cached by the backend for the session, so this
+// runs once). Reuse an existing Google AI Mode tab if the user already has one
+// open — so nam continues that conversation — otherwise open a fresh tab.
 async function ensurePage(browser, config) {
+  let pages = [];
+  try { pages = await browser.pages(); } catch (_) { pages = []; }
+  for (const p of pages) {
+    if (await isAiModePage(p)) return p;
+  }
   return await browser.newPage();
 }
 
@@ -394,7 +416,9 @@ async function waitForAnswer(page, cfg, onChunk, index, toolbarBaseline) {
 // turns type into the on-page follow-up box to preserve conversation context.
 async function ask(browser, page, text, config, onChunk) {
   const cfg = mergeConfig(config);
-  const onAiMode = (page.url() || '').includes('udm=50');
+  // Reused AI Mode tab (or a prior turn) ⇒ treat as a follow-up; a blank/other
+  // tab ⇒ navigate fresh. URL alone is unreliable (udm=50 can drop), so sniff DOM.
+  const onAiMode = await isAiModePage(page);
 
   if (!onAiMode) {
     // First turn: navigate straight to the AI Mode URL with the query. The page

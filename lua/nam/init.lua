@@ -1,0 +1,42 @@
+-- Public API for nam.
+
+local config = require('nam.config')
+local ui = require('nam.ui')
+local backend = require('nam.backend')
+
+local M = {}
+
+function M.setup(opts)
+  config.setup(opts)
+  return M
+end
+
+function M.open()
+  ui.open()
+end
+
+function M.close()
+  ui.close()
+end
+
+function M.toggle()
+  ui.toggle()
+end
+
+-- Called from plugin/nam.lua for the :Nam command.
+function M._command(args)
+  local sub = (args and args.args or ''):lower()
+  if sub == 'close' then
+    ui.close()
+  elseif sub == 'toggle' then
+    ui.toggle()
+  else
+    ui.open()
+  end
+end
+
+function M.shutdown()
+  backend.stop()
+end
+
+return M

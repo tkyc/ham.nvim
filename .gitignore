@@ -1,0 +1,26 @@
+# Node backend dependencies (reinstalled via `npm install`)
+node_modules/
+backend/node_modules/
+
+# npm / node logs & debug output
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+.npm/
+
+# Lua bytecode
+*.luac
+
+# Editor / OS cruft
+*~
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local env / secrets
+.env
+.env.*

@@ -36,9 +36,6 @@ local function render_lines()
 
   if #state.messages == 0 then
     local lines = {
-      'nam — Google AI Mode',
-      '',
-      'Type a question in the box below and press <CR>.',
       '',
     }
     if state.starting then
@@ -248,6 +245,10 @@ function M.close()
   if win_valid(state.conv_win) then pcall(vim.api.nvim_win_close, state.conv_win, true) end
   state.conv_win = nil
   state.input_win = nil
+  state.awaiting = false
+  -- Full teardown: stop the Node backend (which cleanly ends its Firefox
+  -- session). Reopening with :Nam spawns a fresh backend + conversation.
+  backend.stop()
 end
 
 function M.toggle()

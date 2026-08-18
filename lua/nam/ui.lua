@@ -64,11 +64,23 @@ local function redraw()
   vim.bo[state.conv_buf].modifiable = true
   vim.api.nvim_buf_set_lines(state.conv_buf, 0, -1, false, lines)
   vim.bo[state.conv_buf].modifiable = false
-  -- Scroll to bottom.
-  if win_valid(state.conv_win) then
-    local last = vim.api.nvim_buf_line_count(state.conv_buf)
-    pcall(vim.api.nvim_win_set_cursor, state.conv_win, { last, 0 })
+  -- Intentionally does NOT scroll: streaming a long answer leaves the view where
+  -- it is, so you can read from the top instead of being yanked to the bottom.
+end
+
+-- Scroll the newest "You" turn to the top of the conversation window. Called once
+-- when a turn is submitted so the answer streams in below it.
+local function scroll_new_turn_to_top()
+  if not (win_valid(state.conv_win) and buf_valid(state.conv_buf)) then return end
+  local lines = vim.api.nvim_buf_get_lines(state.conv_buf, 0, -1, false)
+  local target = 1
+  for i = #lines, 1, -1 do
+    if lines[i]:find('▶ You', 1, true) then target = i; break end
   end
+  vim.api.nvim_win_call(state.conv_win, function()
+    pcall(vim.api.nvim_win_set_cursor, state.conv_win, { target, 0 })
+    pcall(vim.cmd, 'normal! zt')
+  end)
 end
 
 -- Update the text of the last AI message (used while streaming).
@@ -118,6 +130,7 @@ local function submit()
   table.insert(state.messages, { role = 'ai', text = '' })
   state.awaiting = true
   redraw()
+  scroll_new_turn_to_top() -- put the new question at the top; answer fills below
 
   backend.query(text, {
     on_chunk = function(t) set_last_ai(t) end,

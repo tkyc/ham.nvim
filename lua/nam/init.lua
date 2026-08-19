@@ -36,6 +36,12 @@ function M._command(args)
     ui.toggle()
   elseif sub == 'login' then
     M.login()
+  elseif sub == 'clear' then
+    ui.clear()
+  elseif sub == 'retry' then
+    ui.retry()
+  elseif sub == 'explain' then
+    ui.explain()
   else
     ui.open()
   end

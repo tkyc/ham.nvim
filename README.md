@@ -45,13 +45,37 @@ npm install        # pulls puppeteer-core (does NOT download Chromium)
 dedicated profile — sign into Google, then close the window. (nam runs headless
 after this; you only see Firefox for login or a captcha.)
 
-Then just **`:Nam`**:
+Then just **`:Nam`** — type your question in the input box and press `<CR>`
+(normal mode) or `<C-s>` (insert mode) to send.
 
-- Type your question in the input box, press `<CR>` (normal) or `<C-s>` (insert)
-- `:Nam toggle` / `:Nam close` — toggle or close the panel
-- In the conversation pane: `i` jumps to the input box, `q` closes the panel
-- Slash commands in the input box: `/clear`, `/retry`, `/explain` (explains your
-  last yank)
+### Commands
+
+`:Nam` (and the lowercase `:nam`) takes an optional subcommand, tab-completed:
+
+| Command | What it does |
+|---|---|
+| `:Nam` | Open the chat panel (focuses the input box if already open) |
+| `:Nam close` | Close the panel, stop the backend, and quit nam's headless Firefox |
+| `:Nam toggle` | Open if closed, close if open |
+| `:Nam login` | One-time: open a visible Firefox to sign into Google |
+| `:Nam clear` | Wipe the transcript and start a fresh AI Mode conversation |
+| `:Nam retry` | Re-ask your last question |
+| `:Nam explain` | Ask AI Mode to explain the unnamed register (your last `y` yank) |
+
+The last three also work as **slash commands** typed in the input box —
+`/clear`, `/retry`, `/explain` — configurable via `clear_command`,
+`retry_command`, `explain_command`.
+
+### Keys (in the panel)
+
+| Key | Where | Action |
+|---|---|---|
+| `<CR>` | input box | Send the question |
+| `<C-s>` | input box (insert) | Send the question |
+| `i` | conversation pane | Jump to the input box |
+| `q` | conversation pane | Close the panel |
+
+All keys are configurable under `keymaps` in `setup()`.
 
 nam drives Firefox **headless** (no window) on a **dedicated profile**, so:
 

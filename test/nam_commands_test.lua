@@ -58,6 +58,29 @@ check('after :Nam toggle -> closed', ui.is_open(), false)
 local ok_noop = pcall(function() Nam('close') end)
 check('close when already closed is safe', ok_noop and not ui.is_open(), true)
 
+-- Subcommands that mirror the slash commands (dead backend: they only build the
+-- transcript; the query itself errors out harmlessly).
+local function conv_text()
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local b = vim.api.nvim_win_get_buf(w)
+    if vim.bo[b].filetype == 'markdown' then
+      return table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), '\n')
+    end
+  end
+  return ''
+end
+
+vim.fn.setreg('"', 'local x = 1')
+Nam('explain') -- opens the panel and asks to explain the yank
+pcall(vim.cmd, 'stopinsert')
+check(':Nam explain opens panel', ui.is_open(), true)
+check(':Nam explain uses the register', conv_text():find('Explain in plain English:', 1, true) ~= nil, true)
+
+Nam('clear')
+check(':Nam clear wipes the transcript', conv_text():find('Explain in plain English:', 1, true) == nil, true)
+
+Nam('close')
+
 if #failures == 0 then
   print('\nALL PASS')
   os.exit(0)

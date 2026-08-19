@@ -96,7 +96,8 @@ local function set_last_ai(text)
 end
 
 -- Wipe the conversation window and start a fresh AI Mode conversation.
-local function clear()
+function M.clear()
+  if not M.is_open() then M.open() end
   state.messages = {}
   state.awaiting = false
   if buf_valid(state.input_buf) then
@@ -141,48 +142,54 @@ local function send_query(text)
   })
 end
 
+-- Re-ask the last question (also the /retry command and :Nam retry).
+function M.retry()
+  if not M.is_open() then M.open() end
+  if state.awaiting then
+    vim.notify('[nam] still waiting on the previous answer…', vim.log.levels.WARN)
+    return
+  end
+  local q = last_query()
+  clear_input()
+  if not q then
+    vim.notify('[nam] nothing to retry yet', vim.log.levels.WARN)
+    return
+  end
+  send_query(q)
+end
+
+-- Explain the unnamed register / last yank (also /explain and :Nam explain).
+function M.explain()
+  if not M.is_open() then M.open() end
+  if state.awaiting then
+    vim.notify('[nam] still waiting on the previous answer…', vim.log.levels.WARN)
+    return
+  end
+  local snippet = (vim.fn.getreg('"') or ''):gsub('%s+$', '')
+  clear_input()
+  if snippet == '' then
+    vim.notify('[nam] nothing yanked to explain', vim.log.levels.WARN)
+    return
+  end
+  send_query(config.options.explain_prompt .. '\n\n' .. snippet)
+end
+
 local function submit()
   if not buf_valid(state.input_buf) then return end
   local raw = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
   local text = vim.trim(table.concat(raw, '\n'))
   if text == '' then return end
 
-  -- Slash command: clear the chat window (works even while awaiting a reply).
+  -- Slash commands mirror the :Nam subcommands.
   local cc = config.options.clear_command
-  if cc and cc ~= '' and text == cc then
-    clear()
-    return
-  end
+  if cc and cc ~= '' and text == cc then M.clear(); return end
+  local rc = config.options.retry_command
+  if rc and rc ~= '' and text == rc then M.retry(); return end
+  local ec = config.options.explain_command
+  if ec and ec ~= '' and text == ec then M.explain(); return end
 
   if state.awaiting then
     vim.notify('[nam] still waiting on the previous answer…', vim.log.levels.WARN)
-    return
-  end
-
-  -- Slash command: /retry re-asks the last question as a new turn.
-  local rc = config.options.retry_command
-  if rc and rc ~= '' and text == rc then
-    local q = last_query()
-    clear_input()
-    if not q then
-      vim.notify('[nam] nothing to retry yet', vim.log.levels.WARN)
-      return
-    end
-    send_query(q)
-    return
-  end
-
-  -- Slash command: /explain asks AI Mode to explain the unnamed register (your
-  -- last yank) in plain English.
-  local ec = config.options.explain_command
-  if ec and ec ~= '' and text == ec then
-    local snippet = (vim.fn.getreg('"') or ''):gsub('%s+$', '')
-    clear_input()
-    if snippet == '' then
-      vim.notify('[nam] nothing yanked to explain', vim.log.levels.WARN)
-      return
-    end
-    send_query(config.options.explain_prompt .. '\n\n' .. snippet)
     return
   end
 

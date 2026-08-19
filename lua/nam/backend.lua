@@ -41,6 +41,20 @@ local function dispatch(msg)
   elseif msg.type == 'done' then
     if h and h.on_done then h.on_done(msg.text or '') end
     if msg.id ~= nil then pending[msg.id] = nil end
+  elseif msg.type == 'captcha_cleared' then
+    -- User solved the captcha in the visible window: flip back to headless and
+    -- re-send the original query.
+    if h then
+      vim.notify('[nam] captcha solved — resuming…', vim.log.levels.INFO)
+      firefox.to_headless(function(ok, err)
+        if ok then
+          M._send({ type = 'query', id = msg.id, text = h.text })
+        elseif h.on_error then
+          h.on_error('could not return to headless: ' .. (err or '?'))
+          pending[msg.id] = nil
+        end
+      end)
+    end
   elseif msg.type == 'error' then
     -- Orphaned-session recovery: the port is up but Firefox refuses new BiDi
     -- sessions. Restart Firefox once, then re-send the same query.
@@ -52,6 +66,22 @@ local function dispatch(msg)
           M._send({ type = 'query', id = msg.id, text = h.text })
         elseif h.on_error then
           h.on_error('recovery failed: ' .. (err or 'could not restart Firefox'))
+          pending[msg.id] = nil
+        end
+      end)
+      return
+    end
+    -- Captcha: open a visible window so the user can solve it, then wait for it to
+    -- clear (the backend replies captcha_cleared → flip back to headless + retry).
+    if msg.code == 'ECAPTCHA' and h and not h.captcha_tried and config.options.firefox.manage then
+      h.captcha_tried = true
+      if h.on_chunk then h.on_chunk('⚠ Captcha — solve it in the Firefox window that opened; nam will resume automatically.') end
+      vim.notify('[nam] captcha — opening Firefox to solve it…', vim.log.levels.WARN)
+      firefox.open_solver(function(ok, err)
+        if ok then
+          M._send({ type = 'await_captcha_clear', id = msg.id })
+        elseif h.on_error then
+          h.on_error('could not open captcha window: ' .. (err or '?'))
           pending[msg.id] = nil
         end
       end)

@@ -36,15 +36,29 @@ M.defaults = {
   clear_command = '/clear',
   -- Slash command that re-asks the last question. Set to false/'' to disable.
   retry_command = '/retry',
+  -- Slash command that asks AI Mode to explain the unnamed register (your last
+  -- yank) in plain English. Set to false/'' to disable.
+  explain_command = '/explain',
+  explain_prompt = 'Explain in plain English:',
 
   -- How nam gets the user's Firefox into debug mode. Firefox's remote agent is
   -- startup-only, so nam (re)launches Firefox with --remote-debugging-port when
   -- the port isn't already up.
   firefox = {
     manage = true, -- allow nam to launch/restart Firefox at all
-    auto_restart = true, -- quit+relaunch a normally-running Firefox into debug mode
+    auto_restart = true, -- (default-profile fallback) quit+relaunch a running Firefox
+    headless = true, -- run Firefox headless (no window). Avoids the Firefox-on-
+    -- Wayland occlusion freeze that stalls streaming when a visible window is
+    -- backgrounded. You never need to see nam's Firefox — answers render in nvim.
+    -- A DEDICATED profile so nam's Firefox is a separate instance from your normal
+    -- browsing Firefox (no single-instance lock). Sign in once with :Nam login.
+    -- Set to '' to reuse your default profile instead (blocks your own Firefox).
+    profile = vim.fn.stdpath('data') .. '/nam/firefox',
+    -- Quit nam's Firefox when the panel is closed / nvim exits. Set false to keep
+    -- it running in the background so reopening is instant (session stays warm).
+    close_on_stop = true,
     cmd = 'firefox',
-    extra_args = {}, -- empty ⇒ default profile (keeps your Google login)
+    extra_args = {},
     launch_timeout_ms = 20000,
   },
 

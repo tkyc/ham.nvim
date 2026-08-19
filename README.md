@@ -1,4 +1,4 @@
-# Neovim AI Mode -- Nam 
+# Neovim AI Mode - Nam 
 
 Use Google's **AI Mode** from inside Neovim. Run `:Nam` and the screen splits —
 your file editor on the left, a chat panel on the right. Ask questions, get
@@ -41,31 +41,40 @@ npm install        # pulls puppeteer-core (does NOT download Chromium)
 
 ## Usage
 
-Just run **`:Nam`** in Neovim. nam gets Firefox into debug mode for
-you — no flags to remember:
+**First time:** run **`:Nam login`** once. nam opens a visible Firefox on its own
+dedicated profile — sign into Google, then close the window. (nam runs headless
+after this; you only see Firefox for login or a captcha.)
 
-- If a debug-enabled Firefox is already running, nam attaches and touches nothing.
-- Otherwise nam launches your **normal (logged-in) Firefox** with
-  `--remote-debugging-port`. If Firefox is already open *without* debug mode, nam
-  **quits and relaunches it** (your tabs come back via Firefox's session restore).
-
-The panel opens immediately and shows "Starting Firefox…" until it's ready.
+Then just **`:Nam`**:
 
 - Type your question in the input box, press `<CR>` (normal) or `<C-s>` (insert)
 - `:Nam toggle` / `:Nam close` — toggle or close the panel
 - In the conversation pane: `i` jumps to the input box, `q` closes the panel
+- Slash commands in the input box: `/clear`, `/retry`, `/explain` (explains your
+  last yank)
 
-> ⚠️ **Why the restart?** Firefox's automation agent can only be enabled at
-> startup (`--remote-debugging-port`) and can't be toggled on a running instance,
-> and Firefox is single-instance per profile. So attaching to your real,
-> logged-in Firefox requires it to have been started in debug mode. nam automates
-> that. Tabs reopen after a restart **only if** Firefox's "Open previous windows
-> and tabs" (session restore) setting is on. Prefer not to have nam manage your
-> browser? Set `firefox.manage = false` and launch Firefox yourself with
-> `firefox --remote-debugging-port 9222`.
+nam drives Firefox **headless** (no window) on a **dedicated profile**, so:
+
+- No window means no Firefox-on-Wayland occlusion freeze (streaming never stalls
+  when your terminal is focused).
+- A separate profile means nam **never touches your normal Firefox** — browse as
+  usual while nam runs.
+
+> **Captcha:** if Google shows a bot-check, nam can't solve it headless, so it
+> **opens a visible Firefox window** at the challenge. Solve it; nam detects that
+> it cleared, returns to headless, and finishes your query automatically. nam also
+> reduces how often this happens (hides `navigator.webdriver`, stays signed in).
 
 Run `:checkhealth nam` to verify node, the backend deps, Firefox, and the debug
 port state.
+
+### Profiles
+
+By default nam uses a dedicated profile at `stdpath('data')/nam/firefox`
+(≈ `~/.local/share/nvim/nam/firefox`). To reuse your **default** profile instead
+(no `:Nam login`, but nam's headless instance then blocks your own Firefox while
+it runs), set `firefox.profile = ''`. Prefer to manage Firefox yourself? Set
+`firefox.manage = false` and launch `firefox --remote-debugging-port 9222`.
 
 ## Configuration
 
@@ -87,10 +96,12 @@ require('nam').setup({
     quit = 'q',
   },
   firefox = {
-    manage = true,          -- let nam launch/restart Firefox into debug mode
-    auto_restart = true,    -- quit+relaunch a normally-running Firefox
+    manage = true,          -- let nam launch/restart Firefox
+    headless = true,        -- no window (avoids the Wayland occlusion freeze)
+    profile = vim.fn.stdpath('data') .. '/nam/firefox', -- dedicated profile; '' ⇒ default
+    auto_restart = true,    -- (default-profile fallback only) restart a running Firefox
     cmd = 'firefox',
-    extra_args = {},        -- empty ⇒ default profile (keeps your Google login)
+    extra_args = {},
     launch_timeout_ms = 20000,
   },
   backend = {

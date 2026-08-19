@@ -27,7 +27,11 @@ run() {
 run "nam_commands (Lua) — :Nam open/close/toggle" nvim --headless -l test/nam_commands_test.lua
 run "scroll (Lua) — no scroll-to-bottom"          nvim --headless -l test/scroll_test.lua
 run "retry (Lua) — /retry re-asks last query"     nvim --headless -l test/retry_test.lua
+run "explain (Lua) — /explain the yank register"  nvim --headless -l test/explain_test.lua
 run "ensure_page (Node) — reuse-vs-new tab"       node test/ensure_page_test.js
+run "fill_composer (Node) — multi-line query"     node test/fill_composer_test.js
+run "keep_awake (Node) — visibility spoof"        node test/keep_awake_test.js
+run "captcha_detect (Node) — bot-check detection"  node test/captcha_detect_test.js
 
 echo "======================================================================"
 echo "  Summary: ${#passed[@]} passed, ${#failed[@]} failed"

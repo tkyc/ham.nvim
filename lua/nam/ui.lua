@@ -3,6 +3,7 @@
 
 local config = require('nam.config')
 local backend = require('nam.backend')
+local firefox = require('nam.firefox')
 
 local M = {}
 
@@ -171,6 +172,20 @@ local function submit()
     return
   end
 
+  -- Slash command: /explain asks AI Mode to explain the unnamed register (your
+  -- last yank) in plain English.
+  local ec = config.options.explain_command
+  if ec and ec ~= '' and text == ec then
+    local snippet = (vim.fn.getreg('"') or ''):gsub('%s+$', '')
+    clear_input()
+    if snippet == '' then
+      vim.notify('[nam] nothing yanked to explain', vim.log.levels.WARN)
+      return
+    end
+    send_query(config.options.explain_prompt .. '\n\n' .. snippet)
+    return
+  end
+
   clear_input()
   send_query(text)
 end
@@ -289,9 +304,10 @@ function M.close()
   state.conv_win = nil
   state.input_win = nil
   state.awaiting = false
-  -- Full teardown: stop the Node backend (which cleanly ends its Firefox
-  -- session). Reopening with :Nam spawns a fresh backend + conversation.
+  -- Full teardown: stop the Node backend (which cleanly ends its Firefox session)
+  -- and quit nam's headless Firefox. Reopening with :Nam relaunches both.
   backend.stop()
+  firefox.close()
 end
 
 function M.toggle()

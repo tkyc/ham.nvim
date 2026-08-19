@@ -74,6 +74,20 @@ async function pump() {
   working = false;
 }
 
+// Wait for a captcha the user is solving (in the now-headful window) to clear,
+// then reply so nam can flip back to headless and retry. Reconnects to whatever
+// instance is currently on the debug port (the headful solver window).
+async function awaitCaptchaCleared(id) {
+  try {
+    await ensureConnected();
+    const cleared = await browserlib.awaitCaptchaClear(page, 180000);
+    if (cleared) send({ type: 'captcha_cleared', id });
+    else fail(id, new Error('captcha still present after waiting'));
+  } catch (err) {
+    fail(id, err);
+  }
+}
+
 // Start a fresh AI Mode conversation: navigate the driven tab to about:blank so
 // the next query is treated as a first turn (new thread) rather than a follow-up.
 async function resetConversation() {
@@ -108,6 +122,9 @@ function handleLine(line) {
       break;
     case 'reset':
       resetConversation();
+      break;
+    case 'await_captcha_clear':
+      awaitCaptchaCleared(msg.id);
       break;
     default:
       fail(msg.id, new Error('Unknown message type: ' + msg.type));

@@ -1,8 +1,8 @@
 {
-  "name": "nam-backend",
+  "name": "ham-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "Browser-automation backend for the nam Neovim plugin (drives Google AI Mode in the user's Firefox over WebDriver BiDi).",
+  "description": "Browser-automation backend for the ham Neovim plugin (drives Google AI Mode in the user's Firefox over WebDriver BiDi).",
   "type": "commonjs",
   "main": "server.js",
   "scripts": {

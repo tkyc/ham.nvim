@@ -16,8 +16,8 @@ const path = require('path');
 
 const browserlib = require('../backend/browser.js');
 
-const PORT = Number(process.env.NAM_TEST_PORT || 9343);
-const FIREFOX = process.env.NAM_FIREFOX || 'firefox';
+const PORT = Number(process.env.HAM_TEST_PORT || 9343);
+const FIREFOX = process.env.HAM_FIREFOX || 'firefox';
 
 function haveFirefox() { return spawnSync(FIREFOX, ['--version'], { stdio: 'ignore' }).status === 0; }
 function portOpen(port, timeoutMs) {
@@ -41,7 +41,7 @@ async function waitForPort(port, totalMs) {
 
 async function main() {
   if (!haveFirefox()) { console.log('SKIP: firefox not found on PATH'); process.exit(0); }
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'nam-ff-test-'));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ham-ff-test-'));
   const ff = spawn(FIREFOX, ['--headless', '--profile', profile, '--remote-debugging-port', String(PORT), 'about:blank'],
     { detached: true, stdio: 'ignore', env: Object.assign({}, process.env, { MOZ_ENABLE_WAYLAND: '1' }) });
 

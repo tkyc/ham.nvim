@@ -12,10 +12,10 @@ local root = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':h:h')
 vim.opt.runtimepath:append(root)
 vim.o.lines = 40
 vim.o.columns = 100
-vim.cmd('runtime plugin/nam.lua')
+vim.cmd('runtime plugin/ham.lua')
 
-require('nam').setup({ firefox = { manage = false }, backend = { port = 9999 } })
-local ui = require('nam.ui')
+require('ham').setup({ firefox = { manage = false }, backend = { port = 9999 } })
+local ui = require('ham.ui')
 ui.open()
 pcall(vim.cmd, 'stopinsert')
 
@@ -24,7 +24,7 @@ for _, w in ipairs(vim.api.nvim_list_wins()) do
   local b = vim.api.nvim_win_get_buf(w)
   local ft = vim.bo[b].filetype
   if ft == 'markdown' then conv = { win = w, buf = b }
-  elseif ft == 'nam-input' then input = { win = w, buf = b } end
+  elseif ft == 'ham-input' then input = { win = w, buf = b } end
 end
 
 local failures = {}
@@ -64,7 +64,7 @@ vim.fn.setreg('"', 'local function add(a, b)\n  return a + b\nend\n')
 submit('/explain')
 
 check('/explain adds a You turn', count_you(), 1)
-check('includes the explain prompt', contains('Explain in plain English:'), true)
+check('includes the explain prompt', contains('Explain in plain English. Annotate in a code block with a comment above per line:'), true)
 check('includes register line 1', contains('local function add(a, b)'), true)
 check('includes register line 2 (multi-line kept)', contains('return a + b'), true)
 check('the literal "/explain" is not shown', contains('/explain'), false)

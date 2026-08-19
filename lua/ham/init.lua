@@ -1,8 +1,8 @@
--- Public API for nam.
+-- Public API for ham.
 
-local config = require('nam.config')
-local ui = require('nam.ui')
-local backend = require('nam.backend')
+local config = require('ham.config')
+local ui = require('ham.ui')
+local backend = require('ham.backend')
 
 local M = {}
 
@@ -23,9 +23,9 @@ function M.toggle()
   ui.toggle()
 end
 
--- Called from plugin/nam.lua for the :Nam command.
+-- Called from plugin/ham.lua for the :Ham command.
 function M.login()
-  require('nam.firefox').login()
+  require('ham.firefox').login()
 end
 
 function M._command(args)
@@ -49,7 +49,7 @@ end
 
 function M.shutdown()
   backend.stop()
-  require('nam.firefox').close() -- quit nam's headless Firefox on nvim exit
+  require('ham.firefox').close() -- quit ham's headless Firefox on nvim exit
 end
 
 return M

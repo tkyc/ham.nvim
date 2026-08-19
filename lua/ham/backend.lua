@@ -1,7 +1,7 @@
 -- Manages the long-lived Node backend process and the NDJSON protocol.
 
-local config = require('nam.config')
-local firefox = require('nam.firefox')
+local config = require('ham.config')
+local firefox = require('ham.firefox')
 
 local M = {}
 
@@ -45,7 +45,7 @@ local function dispatch(msg)
     -- User solved the captcha in the visible window: flip back to headless and
     -- re-send the original query.
     if h then
-      vim.notify('[nam] captcha solved — resuming…', vim.log.levels.INFO)
+      vim.notify('[ham] captcha solved — resuming…', vim.log.levels.INFO)
       firefox.to_headless(function(ok, err)
         if ok then
           M._send({ type = 'query', id = msg.id, text = h.text })
@@ -60,7 +60,7 @@ local function dispatch(msg)
     -- sessions. Restart Firefox once, then re-send the same query.
     if msg.code == 'ESESSIONBUSY' and h and not h.recovered and config.options.firefox.manage then
       h.recovered = true
-      vim.notify('[nam] Firefox automation session was stuck; restarting Firefox to recover…', vim.log.levels.WARN)
+      vim.notify('[ham] Firefox automation session was stuck; restarting Firefox to recover…', vim.log.levels.WARN)
       firefox.restart(function(ok, err)
         if ok then
           M._send({ type = 'query', id = msg.id, text = h.text })
@@ -75,8 +75,8 @@ local function dispatch(msg)
     -- clear (the backend replies captcha_cleared → flip back to headless + retry).
     if msg.code == 'ECAPTCHA' and h and not h.captcha_tried and config.options.firefox.manage then
       h.captcha_tried = true
-      if h.on_chunk then h.on_chunk('⚠ Captcha — solve it in the Firefox window that opened; nam will resume automatically.') end
-      vim.notify('[nam] captcha — opening Firefox to solve it…', vim.log.levels.WARN)
+      if h.on_chunk then h.on_chunk('⚠ Captcha — solve it in the Firefox window that opened; ham will resume automatically.') end
+      vim.notify('[ham] captcha — opening Firefox to solve it…', vim.log.levels.WARN)
       firefox.open_solver(function(ok, err)
         if ok then
           M._send({ type = 'await_captcha_clear', id = msg.id })
@@ -93,7 +93,7 @@ local function dispatch(msg)
     else
       -- Untargeted error (no id) — surface globally.
       vim.schedule(function()
-        vim.notify('[nam] backend error: ' .. (msg.message or '?'), vim.log.levels.ERROR)
+        vim.notify('[ham] backend error: ' .. (msg.message or '?'), vim.log.levels.ERROR)
       end)
     end
   end
@@ -124,7 +124,7 @@ local function on_stderr(_, data)
     -- Backend logs progress on stderr; keep it quiet unless it looks like a real error.
     if text:lower():find('error') then
       vim.schedule(function()
-        vim.notify('[nam] ' .. text, vim.log.levels.WARN)
+        vim.notify('[ham] ' .. text, vim.log.levels.WARN)
       end)
     end
   end
@@ -134,7 +134,7 @@ local function on_exit(_, code)
   local deliberate = stopping
   vim.schedule(function()
     if code ~= 0 and not deliberate then
-      vim.notify('[nam] backend exited (code ' .. code .. ')', vim.log.levels.WARN)
+      vim.notify('[ham] backend exited (code ' .. code .. ')', vim.log.levels.WARN)
     end
   end)
   job = nil
@@ -173,7 +173,7 @@ local function spawn_backend()
   if job <= 0 then
     job = nil
     flush_start_failure('failed to start backend process')
-    vim.notify('[nam] failed to start backend', vim.log.levels.ERROR)
+    vim.notify('[ham] failed to start backend', vim.log.levels.ERROR)
     return
   end
 
@@ -195,12 +195,12 @@ function M.start(cb)
 
   if vim.fn.executable(opts.node_cmd) == 0 then
     flush_start_failure('`' .. opts.node_cmd .. '` not found on PATH')
-    vim.notify('[nam] `' .. opts.node_cmd .. '` not found on PATH', vim.log.levels.ERROR)
+    vim.notify('[ham] `' .. opts.node_cmd .. '` not found on PATH', vim.log.levels.ERROR)
     return
   end
   if vim.fn.filereadable(opts.server_path) == 0 then
     flush_start_failure('backend not found at ' .. opts.server_path)
-    vim.notify('[nam] backend not found at ' .. opts.server_path, vim.log.levels.ERROR)
+    vim.notify('[ham] backend not found at ' .. opts.server_path, vim.log.levels.ERROR)
     return
   end
 
@@ -208,7 +208,7 @@ function M.start(cb)
   firefox.ensure(function(ok, err)
     ensuring = false
     if not ok then
-      vim.notify('[nam] ' .. (err or 'could not start Firefox'), vim.log.levels.ERROR)
+      vim.notify('[ham] ' .. (err or 'could not start Firefox'), vim.log.levels.ERROR)
       flush_start_failure(err)
       return
     end

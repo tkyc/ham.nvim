@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the whole nam test suite and report a combined pass/fail.
+# Run the whole ham test suite and report a combined pass/fail.
 #   ./test/run.sh    (or: bash test/run.sh)
 # Exits 0 if every test passes, 1 otherwise.
 
@@ -24,7 +24,7 @@ run() {
   echo
 }
 
-run "nam_commands (Lua) — :Nam open/close/toggle" nvim --headless -l test/nam_commands_test.lua
+run "ham_commands (Lua) — :Ham open/close/toggle" nvim --headless -l test/ham_commands_test.lua
 run "scroll (Lua) — no scroll-to-bottom"          nvim --headless -l test/scroll_test.lua
 run "retry (Lua) — /retry re-asks last query"     nvim --headless -l test/retry_test.lua
 run "explain (Lua) — /explain the yank register"  nvim --headless -l test/explain_test.lua

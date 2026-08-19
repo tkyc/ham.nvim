@@ -10,7 +10,7 @@
 //
 //   node test/ensure_page_test.js
 //
-// Env overrides: NAM_TEST_PORT (default 9337), NAM_FIREFOX (default "firefox").
+// Env overrides: HAM_TEST_PORT (default 9337), HAM_FIREFOX (default "firefox").
 
 const { spawnSync, spawn } = require('child_process');
 const net = require('net');
@@ -20,8 +20,8 @@ const path = require('path');
 
 const browserlib = require('../backend/browser.js');
 
-const PORT = Number(process.env.NAM_TEST_PORT || 9337);
-const FIREFOX = process.env.NAM_FIREFOX || 'firefox';
+const PORT = Number(process.env.HAM_TEST_PORT || 9337);
+const FIREFOX = process.env.HAM_FIREFOX || 'firefox';
 
 function haveFirefox() {
   const r = spawnSync(FIREFOX, ['--version'], { stdio: 'ignore' });
@@ -50,11 +50,11 @@ async function waitForPort(port, totalMs) {
 
 async function main() {
   if (!haveFirefox()) {
-    console.log('SKIP: firefox not found on PATH (set NAM_FIREFOX or install Firefox)');
+    console.log('SKIP: firefox not found on PATH (set HAM_FIREFOX or install Firefox)');
     process.exit(0);
   }
 
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'nam-ff-test-'));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ham-ff-test-'));
   const ff = spawn(FIREFOX, ['--headless', '--profile', profile, '--remote-debugging-port', String(PORT), 'about:blank'],
     { detached: true, stdio: 'ignore', env: Object.assign({}, process.env, { MOZ_ENABLE_WAYLAND: '1' }) });
 

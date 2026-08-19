@@ -9,7 +9,7 @@
 //
 //   node test/keep_awake_test.js
 //
-// Env overrides: NAM_TEST_PORT (default 9341), NAM_FIREFOX (default "firefox").
+// Env overrides: HAM_TEST_PORT (default 9341), HAM_FIREFOX (default "firefox").
 
 const { spawnSync, spawn } = require('child_process');
 const net = require('net');
@@ -19,8 +19,8 @@ const path = require('path');
 
 const browserlib = require('../backend/browser.js');
 
-const PORT = Number(process.env.NAM_TEST_PORT || 9341);
-const FIREFOX = process.env.NAM_FIREFOX || 'firefox';
+const PORT = Number(process.env.HAM_TEST_PORT || 9341);
+const FIREFOX = process.env.HAM_FIREFOX || 'firefox';
 
 function haveFirefox() {
   return spawnSync(FIREFOX, ['--version'], { stdio: 'ignore' }).status === 0;
@@ -46,11 +46,11 @@ async function waitForPort(port, totalMs) {
 
 async function main() {
   if (!haveFirefox()) {
-    console.log('SKIP: firefox not found on PATH (set NAM_FIREFOX or install Firefox)');
+    console.log('SKIP: firefox not found on PATH (set HAM_FIREFOX or install Firefox)');
     process.exit(0);
   }
 
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'nam-ff-test-'));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ham-ff-test-'));
   const ff = spawn(FIREFOX, ['--headless', '--profile', profile, '--remote-debugging-port', String(PORT), 'about:blank'],
     { detached: true, stdio: 'ignore', env: Object.assign({}, process.env, { MOZ_ENABLE_WAYLAND: '1' }) });
 
@@ -94,7 +94,7 @@ async function main() {
     // requestAnimationFrame is shimmed onto timers (survives compositor frame
     // pausing on a backgrounded/occluded window).
     const ka = await page.evaluate(() => new Promise((resolve) => {
-      const hasCtx = !!window.__namAudioCtx;
+      const hasCtx = !!window.__hamAudioCtx;
       const rafSrc = String(window.requestAnimationFrame);
       // The shim must actually fire a callback with a numeric timestamp.
       window.requestAnimationFrame((t) => resolve({ hasCtx, rafSrc, rafFired: typeof t === 'number' }));

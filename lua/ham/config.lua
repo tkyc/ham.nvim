@@ -1,4 +1,4 @@
--- Configuration + defaults for nam.
+-- Configuration + defaults for ham.
 -- Anything under `backend` is forwarded verbatim to the Node backend as its
 -- {"type":"config"} message, so Google-specific selectors/URL/timings can be
 -- overridden from a user's setup() call without editing the plugin.
@@ -6,7 +6,7 @@
 local M = {}
 
 local function plugin_root()
-  -- .../lua/nam/config.lua -> plugin root
+  -- .../lua/ham/config.lua -> plugin root
   local src = debug.getinfo(1, 'S').source:sub(2)
   return vim.fn.fnamemodify(src, ':h:h:h')
 end
@@ -39,22 +39,22 @@ M.defaults = {
   -- Slash command that asks AI Mode to explain the unnamed register (your last
   -- yank) in plain English. Set to false/'' to disable.
   explain_command = '/explain',
-  explain_prompt = 'Explain in plain English:',
+  explain_prompt = 'Explain in plain English. Annotate in a code block with a comment above per line:',
 
-  -- How nam gets the user's Firefox into debug mode. Firefox's remote agent is
-  -- startup-only, so nam (re)launches Firefox with --remote-debugging-port when
+  -- How ham gets the user's Firefox into debug mode. Firefox's remote agent is
+  -- startup-only, so ham (re)launches Firefox with --remote-debugging-port when
   -- the port isn't already up.
   firefox = {
-    manage = true, -- allow nam to launch/restart Firefox at all
+    manage = true, -- allow ham to launch/restart Firefox at all
     auto_restart = true, -- (default-profile fallback) quit+relaunch a running Firefox
     headless = true, -- run Firefox headless (no window). Avoids the Firefox-on-
     -- Wayland occlusion freeze that stalls streaming when a visible window is
-    -- backgrounded. You never need to see nam's Firefox — answers render in nvim.
-    -- A DEDICATED profile so nam's Firefox is a separate instance from your normal
-    -- browsing Firefox (no single-instance lock). Sign in once with :Nam login.
+    -- backgrounded. You never need to see ham's Firefox — answers render in nvim.
+    -- A DEDICATED profile so ham's Firefox is a separate instance from your normal
+    -- browsing Firefox (no single-instance lock). Sign in once with :Ham login.
     -- Set to '' to reuse your default profile instead (blocks your own Firefox).
-    profile = vim.fn.stdpath('data') .. '/nam/firefox',
-    -- Quit nam's Firefox when the panel is closed / nvim exits. Set false to keep
+    profile = vim.fn.stdpath('data') .. '/ham/firefox',
+    -- Quit ham's Firefox when the panel is closed / nvim exits. Set false to keep
     -- it running in the background so reopening is instant (session stays warm).
     close_on_stop = true,
     cmd = 'firefox',

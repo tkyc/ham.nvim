@@ -85,8 +85,8 @@ const KEEPALIVE_SCRIPT = "(function(){try{"
   + "Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return 'visible';}});"
   + "document.hasFocus=function(){return true;};"
   + "document.addEventListener('visibilitychange',function(e){e.stopImmediatePropagation();},true);"
-  + "if(!window.__namKeepAlive){window.__namKeepAlive=true;"
-  + "try{var C=window.AudioContext||window.webkitAudioContext;if(C){var a=new C();window.__namAudioCtx=a;"
+  + "if(!window.__hamKeepAlive){window.__hamKeepAlive=true;"
+  + "try{var C=window.AudioContext||window.webkitAudioContext;if(C){var a=new C();window.__hamAudioCtx=a;"
   + "var o=a.createOscillator(),g=a.createGain();g.gain.value=0;o.connect(g);g.connect(a.destination);o.start(0);"
   + "if(a.state==='suspended'&&a.resume){a.resume().catch(function(){});}}}catch(e){}"
   + "try{var now=function(){return (window.performance&&performance.now)?performance.now():Date.now();};"
@@ -171,20 +171,34 @@ async function detectCaptcha(page) {
   }
 }
 
-// Poll until the captcha is gone (the user solved it in the visible window), or a
-// timeout. Used by the `await_captcha_clear` command.
-async function awaitCaptchaClear(page, timeoutMs) {
+// Poll until the user solves the bot-check in the visible window, or a timeout.
+// Scans EVERY tab (not one cached page): the solver window lands on Google's
+// /sorry interstitial, which isn't an AI Mode page, so ensurePage would hand back
+// a blank tab and we'd wrongly report "cleared" before the user did anything. We
+// only declare success once a captcha has actually been seen AND then disappears.
+async function awaitCaptchaClear(browser, timeoutMs) {
   const deadline = Date.now() + (timeoutMs || 180000);
+  let sawCaptcha = false;
   while (Date.now() < deadline) {
-    if (!(await detectCaptcha(page))) return true;
+    let pages = [];
+    try { pages = await browser.pages(); } catch (_) { pages = []; }
+    let anyCaptcha = false;
+    for (const p of pages) {
+      try { if (await detectCaptcha(p)) { anyCaptcha = true; break; } } catch (_) { /* tab navigating */ }
+    }
+    if (anyCaptcha) {
+      sawCaptcha = true;
+    } else if (sawCaptcha) {
+      return true; // a bot-check was present and is now gone → solved
+    }
     await sleep(1500);
   }
   return false;
 }
 
-// Return a tab for nam to drive (cached by the backend for the session, so this
+// Return a tab for ham to drive (cached by the backend for the session, so this
 // runs once). Reuse an existing Google AI Mode tab if the user already has one
-// open — so nam continues that conversation — otherwise open a fresh tab.
+// open — so ham continues that conversation — otherwise open a fresh tab.
 async function ensurePage(browser, config) {
   let pages = [];
   try { pages = await browser.pages(); } catch (_) { pages = []; }
@@ -202,7 +216,7 @@ const spoofRegistered = new WeakSet();
 // URL), where AI Mode reads document.visibilityState at page load and would
 // otherwise pause streaming while Firefox is backgrounded. Registered once per
 // page. NOTE: after this, browser.newPage() hangs on Firefox BiDi — that's fine
-// because nam only creates the tab in ensurePage (before any ask/preload) and
+// because ham only creates the tab in ensurePage (before any ask/preload) and
 // never afterward; page.goto still works.
 async function registerVisibilitySpoof(page) {
   if (spoofRegistered.has(page)) return;
@@ -478,6 +492,12 @@ async function countToolbars(page, cfg) {
 // answer gained its own toolbar. That survives mid-stream pauses and, unlike a
 // per-turn toolbar check, works for follow-ups (turns share a container). Falls
 // back to a long text-idle if the toolbar signal ever fails.
+function captchaError() {
+  const e = new Error('Google is showing a captcha / bot check.');
+  e.code = 'ECAPTCHA';
+  return e;
+}
+
 async function waitForAnswer(page, cfg, onChunk, index, toolbarBaseline) {
   const deadline = Date.now() + cfg.response_timeout_ms;
   let last = '';
@@ -494,6 +514,13 @@ async function waitForAnswer(page, cfg, onChunk, index, toolbarBaseline) {
       if (onChunk) onChunk(text);
     } else if (sawText) {
       stable += 1;
+    } else if (await detectCaptcha(page)) {
+      // No answer text yet AND a bot-check is on the page — e.g. a first-turn nav
+      // that redirected to Google's /sorry interstitial a beat AFTER
+      // domcontentloaded, so ask()'s pre-flight check missed it. Surface it NOW so
+      // ham opens the solver immediately, instead of stalling for the full
+      // response_timeout_ms first (which read as a ~2-minute hang).
+      throw captchaError();
     }
 
     if (sawText && stable >= cfg.settle_polls) {
@@ -506,11 +533,7 @@ async function waitForAnswer(page, cfg, onChunk, index, toolbarBaseline) {
 
   if (!sawText) {
     // A captcha behind the query is the most common reason no answer appears.
-    if (await detectCaptcha(page)) {
-      const e = new Error('Google is showing a captcha / bot check.');
-      e.code = 'ECAPTCHA';
-      throw e;
-    }
+    if (await detectCaptcha(page)) throw captchaError();
     throw new Error(
       'No answer text found. AI Mode markup may have changed — update ' +
       'response_selectors (see backend/browser.js).'
@@ -545,7 +568,9 @@ async function ask(browser, page, text, config, onChunk) {
     // The preload registered above spoofs visibility before AI Mode reads it.
     const url = cfg.ai_mode_url + encodeURIComponent(text);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: cfg.nav_timeout_ms });
-    if (await detectCaptcha(page)) { const e = new Error('Google is showing a captcha / bot check.'); e.code = 'ECAPTCHA'; throw e; }
+    if (await detectCaptcha(page)) throw captchaError();
+    // waitForAnswer also re-checks for a captcha on each poll, so a /sorry redirect
+    // that lands a beat after domcontentloaded is still caught promptly.
     return waitForAnswer(page, cfg, onChunk, 0, 0);
   }
 
@@ -578,6 +603,9 @@ async function ask(browser, page, text, config, onChunk) {
     appeared = await waitForNewAnswer(page, cfg.response_selectors, before, cfg.new_turn_timeout_ms);
   }
   if (!appeared) {
+    // A bot-check can appear mid-conversation too; report it so ham opens the
+    // solver rather than a misleading "composer changed" error.
+    if (await detectCaptcha(page)) throw captchaError();
     throw new Error('Follow-up did not submit — the composer or submit control may have changed.');
   }
 

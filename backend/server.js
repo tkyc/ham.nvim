@@ -1,6 +1,6 @@
 'use strict';
 
-// Long-lived backend for the nam Neovim plugin.
+// Long-lived backend for the ham Neovim plugin.
 //
 // Speaks newline-delimited JSON over stdio:
 //   IN : {"type":"config","config":{...}}        (optional, send once first)
@@ -52,12 +52,41 @@ async function ensureConnected() {
   }
 }
 
+// A connection-level failure (as opposed to a coded ECAPTCHA/ESESSIONBUSY that the
+// Lua side must see): the browser socket dropped, typically because Firefox was
+// just restarted under us — e.g. the captcha flip (headful solver → back to
+// headless) that immediately re-sends this query. Coded errors carry err.code and
+// must propagate; these don't.
+function isConnDropped(err) {
+  if (err && err.code) return false;
+  const m = (err && (err.message || String(err))) || '';
+  return /Connection closed|Target closed|Session.*closed|socket hang up|Protocol error|WebSocket|ECONNRESET|ECONNREFUSED/i.test(m);
+}
+
 async function handleQuery(job) {
-  await ensureConnected();
-  const final = await browserlib.ask(browser, page, job.text, config, (partial) => {
-    send({ type: 'chunk', id: job.id, text: partial });
-  });
-  send({ type: 'done', id: job.id, text: final });
+  const deadline = Date.now() + 30000;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await ensureConnected();
+      const final = await browserlib.ask(browser, page, job.text, config, (partial) => {
+        send({ type: 'chunk', id: job.id, text: partial });
+      });
+      send({ type: 'done', id: job.id, text: final });
+      return;
+    } catch (err) {
+      // Firefox was likely restarted under us (captcha/headless flip). Drop the
+      // stale handles and retry connecting to the fresh instance for a while
+      // before giving up, so the post-captcha re-send actually runs instead of
+      // dying on a "Connection closed".
+      if (isConnDropped(err) && attempt <= 8 && Date.now() < deadline) {
+        browser = null;
+        page = null;
+        await new Promise((r) => setTimeout(r, Math.min(500 * attempt, 2500)));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 async function pump() {
@@ -75,12 +104,12 @@ async function pump() {
 }
 
 // Wait for a captcha the user is solving (in the now-headful window) to clear,
-// then reply so nam can flip back to headless and retry. Reconnects to whatever
+// then reply so ham can flip back to headless and retry. Reconnects to whatever
 // instance is currently on the debug port (the headful solver window).
 async function awaitCaptchaCleared(id) {
   try {
     await ensureConnected();
-    const cleared = await browserlib.awaitCaptchaClear(page, 180000);
+    const cleared = await browserlib.awaitCaptchaClear(browser, 180000);
     if (cleared) send({ type: 'captcha_cleared', id });
     else fail(id, new Error('captcha still present after waiting'));
   } catch (err) {

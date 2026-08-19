@@ -1,7 +1,7 @@
--- :checkhealth nam
+-- :checkhealth ham
 
-local config = require('nam.config')
-local firefox = require('nam.firefox')
+local config = require('ham.config')
+local firefox = require('ham.firefox')
 
 local M = {}
 
@@ -14,7 +14,7 @@ local h_error = health.error or health.report_error
 function M.check()
   local opts = config.options
 
-  h_start('nam')
+  h_start('ham')
 
   -- node
   if vim.fn.executable(opts.node_cmd) == 1 then
@@ -52,12 +52,12 @@ function M.check()
   if firefox.is_up_sync(host, port, 800) then
     h_ok(('Firefox debug port reachable at %s:%d'):format(host, port))
   elseif opts.firefox.manage then
-    h_ok(('debug port %s:%d is down — nam will %s Firefox on :nam'):format(
+    h_ok(('debug port %s:%d is down — ham will %s Firefox on :ham'):format(
       host, port, opts.firefox.auto_restart and 'launch/restart' or 'launch'))
   else
     h_warn(('nothing listening at %s:%d (firefox.manage is off)'):format(host, port), {
       'Launch Firefox yourself with:  firefox --remote-debugging-port ' .. tostring(port),
-      'or set firefox.manage = true to let nam do it.',
+      'or set firefox.manage = true to let ham do it.',
     })
   end
 end

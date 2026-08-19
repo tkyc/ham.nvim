@@ -1,9 +1,9 @@
--- The :nam chat panel: a vertical split holding a read-only conversation buffer
+-- The :ham chat panel: a vertical split holding a read-only conversation buffer
 -- on top and a small editable input buffer below.
 
-local config = require('nam.config')
-local backend = require('nam.backend')
-local firefox = require('nam.firefox')
+local config = require('ham.config')
+local backend = require('ham.backend')
+local firefox = require('ham.firefox')
 
 local M = {}
 
@@ -142,33 +142,33 @@ local function send_query(text)
   })
 end
 
--- Re-ask the last question (also the /retry command and :Nam retry).
+-- Re-ask the last question (also the /retry command and :Ham retry).
 function M.retry()
   if not M.is_open() then M.open() end
   if state.awaiting then
-    vim.notify('[nam] still waiting on the previous answer…', vim.log.levels.WARN)
+    vim.notify('[ham] still waiting on the previous answer…', vim.log.levels.WARN)
     return
   end
   local q = last_query()
   clear_input()
   if not q then
-    vim.notify('[nam] nothing to retry yet', vim.log.levels.WARN)
+    vim.notify('[ham] nothing to retry yet', vim.log.levels.WARN)
     return
   end
   send_query(q)
 end
 
--- Explain the unnamed register / last yank (also /explain and :Nam explain).
+-- Explain the unnamed register / last yank (also /explain and :Ham explain).
 function M.explain()
   if not M.is_open() then M.open() end
   if state.awaiting then
-    vim.notify('[nam] still waiting on the previous answer…', vim.log.levels.WARN)
+    vim.notify('[ham] still waiting on the previous answer…', vim.log.levels.WARN)
     return
   end
   local snippet = (vim.fn.getreg('"') or ''):gsub('%s+$', '')
   clear_input()
   if snippet == '' then
-    vim.notify('[nam] nothing yanked to explain', vim.log.levels.WARN)
+    vim.notify('[ham] nothing yanked to explain', vim.log.levels.WARN)
     return
   end
   send_query(config.options.explain_prompt .. '\n\n' .. snippet)
@@ -180,7 +180,7 @@ local function submit()
   local text = vim.trim(table.concat(raw, '\n'))
   if text == '' then return end
 
-  -- Slash commands mirror the :Nam subcommands.
+  -- Slash commands mirror the :Ham subcommands.
   local cc = config.options.clear_command
   if cc and cc ~= '' and text == cc then M.clear(); return end
   local rc = config.options.retry_command
@@ -189,7 +189,7 @@ local function submit()
   if ec and ec ~= '' and text == ec then M.explain(); return end
 
   if state.awaiting then
-    vim.notify('[nam] still waiting on the previous answer…', vim.log.levels.WARN)
+    vim.notify('[ham] still waiting on the previous answer…', vim.log.levels.WARN)
     return
   end
 
@@ -253,13 +253,17 @@ function M.open()
     return
   end
 
+  -- Remember the window the user was in so opening the panel doesn't steal the
+  -- cursor: ham builds the split, then hands focus straight back.
+  local prev_win = vim.api.nvim_get_current_win()
+
   local opts = config.options
   state.conv_buf = make_scratch()
   state.input_buf = make_scratch()
   -- Render the transcript as markdown so headings, bold, lists and links from the
   -- AI Mode answer get proper highlighting.
   vim.bo[state.conv_buf].filetype = 'markdown'
-  vim.bo[state.input_buf].filetype = 'nam-input'
+  vim.bo[state.input_buf].filetype = 'ham-input'
   vim.bo[state.conv_buf].modifiable = false
 
   -- Compute the chat panel width: width_pct of the screen (default 30%), unless a
@@ -302,7 +306,11 @@ function M.open()
     end
   end, (config.options.firefox.launch_timeout_ms or 20000) + 3000)
 
-  focus_input()
+  -- Return the cursor to where it was; opening the panel must not move focus or
+  -- start insert mode. (Use :Ham again, or the focus_input keymap, to jump in.)
+  if win_valid(prev_win) then
+    vim.api.nvim_set_current_win(prev_win)
+  end
 end
 
 function M.close()
@@ -312,7 +320,7 @@ function M.close()
   state.input_win = nil
   state.awaiting = false
   -- Full teardown: stop the Node backend (which cleanly ends its Firefox session)
-  -- and quit nam's headless Firefox. Reopening with :Nam relaunches both.
+  -- and quit ham's headless Firefox. Reopening with :Ham relaunches both.
   backend.stop()
   firefox.close()
 end

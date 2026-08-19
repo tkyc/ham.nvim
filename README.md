@@ -1,13 +1,13 @@
-# Neovim AI Mode - Nam 
+# Headless AI Mode - Ham 
 
-Use Google's **AI Mode** from inside Neovim. Run `:Nam` and the screen splits —
+Use Google's **AI Mode** from inside Neovim. Run `:Ham` and the screen splits —
 your file editor on the left, a chat panel on the right. Ask questions, get
 answers, keep asking follow-ups; the conversation lives for the whole nvim session.
 
-Because AI Mode is a web-only product with no public API, nam drives **your own
+Because AI Mode is a web-only product with no public API, ham drives **your own
 Firefox** over the WebDriver BiDi protocol and reuses your logged-in Google
 session. Nothing is scraped headlessly and your browser is never launched or
-closed for you — nam only *attaches* to a Firefox you started.
+closed for you — ham only *attaches* to a Firefox you started.
 
 ## Requirements
 
@@ -22,45 +22,45 @@ closed for you — nam only *attaches* to a Firefox you started.
 
 ```lua
 {
-  dir = '/home/tkyc/repo/nam', -- or a git URL once you publish it
+  dir = '/home/tkyc/repo/ham', -- or a git URL once you publish it
   build = 'cd backend && npm install',
-  opts = {}, -- calls require('nam').setup({})
-  cmd = 'Nam',
+  opts = {}, -- calls require('ham').setup({})
+  cmd = 'Ham',
 }
 ```
 
 Without a plugin manager, add the repo to your `runtimepath` and run
-`require('nam').setup()` in your config.
+`require('ham').setup()` in your config.
 
 **2. Install the backend dependency:**
 
 ```sh
-cd /home/tkyc/repo/nam/backend
+cd /home/tkyc/repo/ham/backend
 npm install        # pulls puppeteer-core (does NOT download Chromium)
 ```
 
 ## Usage
 
-**First time:** run **`:Nam login`** once. nam opens a visible Firefox on its own
-dedicated profile — sign into Google, then close the window. (nam runs headless
+**First time:** run **`:Ham login`** once. ham opens a visible Firefox on its own
+dedicated profile — sign into Google, then close the window. (ham runs headless
 after this; you only see Firefox for login or a captcha.)
 
-Then just **`:Nam`** — type your question in the input box and press `<CR>`
+Then just **`:Ham`** — type your question in the input box and press `<CR>`
 (normal mode) or `<C-s>` (insert mode) to send.
 
 ### Commands
 
-`:Nam` (and the lowercase `:nam`) takes an optional subcommand, tab-completed:
+`:Ham` (and the lowercase `:ham`) takes an optional subcommand, tab-completed:
 
 | Command | What it does |
 |---|---|
-| `:Nam` | Open the chat panel (focuses the input box if already open) |
-| `:Nam close` | Close the panel, stop the backend, and quit nam's headless Firefox |
-| `:Nam toggle` | Open if closed, close if open |
-| `:Nam login` | One-time: open a visible Firefox to sign into Google |
-| `:Nam clear` | Wipe the transcript and start a fresh AI Mode conversation |
-| `:Nam retry` | Re-ask your last question |
-| `:Nam explain` | Ask AI Mode to explain the unnamed register (your last `y` yank) |
+| `:Ham` | Open the chat panel (focuses the input box if already open) |
+| `:Ham close` | Close the panel, stop the backend, and quit ham's headless Firefox |
+| `:Ham toggle` | Open if closed, close if open |
+| `:Ham login` | One-time: open a visible Firefox to sign into Google |
+| `:Ham clear` | Wipe the transcript and start a fresh AI Mode conversation |
+| `:Ham retry` | Re-ask your last question |
+| `:Ham explain` | Ask AI Mode to explain the unnamed register (your last `y` yank) |
 
 The last three also work as **slash commands** typed in the input box —
 `/clear`, `/retry`, `/explain` — configurable via `clear_command`,
@@ -77,26 +77,26 @@ The last three also work as **slash commands** typed in the input box —
 
 All keys are configurable under `keymaps` in `setup()`.
 
-nam drives Firefox **headless** (no window) on a **dedicated profile**, so:
+ham drives Firefox **headless** (no window) on a **dedicated profile**, so:
 
 - No window means no Firefox-on-Wayland occlusion freeze (streaming never stalls
   when your terminal is focused).
-- A separate profile means nam **never touches your normal Firefox** — browse as
-  usual while nam runs.
+- A separate profile means ham **never touches your normal Firefox** — browse as
+  usual while ham runs.
 
-> **Captcha:** if Google shows a bot-check, nam can't solve it headless, so it
-> **opens a visible Firefox window** at the challenge. Solve it; nam detects that
-> it cleared, returns to headless, and finishes your query automatically. nam also
+> **Captcha:** if Google shows a bot-check, ham can't solve it headless, so it
+> **opens a visible Firefox window** at the challenge. Solve it; ham detects that
+> it cleared, returns to headless, and finishes your query automatically. ham also
 > reduces how often this happens (hides `navigator.webdriver`, stays signed in).
 
-Run `:checkhealth nam` to verify node, the backend deps, Firefox, and the debug
+Run `:checkhealth ham` to verify node, the backend deps, Firefox, and the debug
 port state.
 
 ### Profiles
 
-By default nam uses a dedicated profile at `stdpath('data')/nam/firefox`
-(≈ `~/.local/share/nvim/nam/firefox`). To reuse your **default** profile instead
-(no `:Nam login`, but nam's headless instance then blocks your own Firefox while
+By default ham uses a dedicated profile at `stdpath('data')/ham/firefox`
+(≈ `~/.local/share/nvim/ham/firefox`). To reuse your **default** profile instead
+(no `:Ham login`, but ham's headless instance then blocks your own Firefox while
 it runs), set `firefox.profile = ''`. Prefer to manage Firefox yourself? Set
 `firefox.manage = false` and launch `firefox --remote-debugging-port 9222`.
 
@@ -105,7 +105,7 @@ it runs), set `firefox.profile = ''`. Prefer to manage Firefox yourself? Set
 Defaults shown; pass overrides to `setup()`:
 
 ```lua
-require('nam').setup({
+require('ham').setup({
   node_cmd = 'node',
   split = {
     side = 'right',      -- 'right' | 'left'
@@ -120,9 +120,9 @@ require('nam').setup({
     quit = 'q',
   },
   firefox = {
-    manage = true,          -- let nam launch/restart Firefox
+    manage = true,          -- let ham launch/restart Firefox
     headless = true,        -- no window (avoids the Wayland occlusion freeze)
-    profile = vim.fn.stdpath('data') .. '/nam/firefox', -- dedicated profile; '' ⇒ default
+    profile = vim.fn.stdpath('data') .. '/ham/firefox', -- dedicated profile; '' ⇒ default
     auto_restart = true,    -- (default-profile fallback only) restart a running Firefox
     cmd = 'firefox',
     extra_args = {},
@@ -140,17 +140,17 @@ require('nam').setup({
 
 ## Troubleshooting
 
-- **"Could not attach to Firefox…" / debug port never came up** — nam couldn't get
-  Firefox into debug mode. Check `:checkhealth nam`; make sure `firefox` is on your
+- **"Could not attach to Firefox…" / debug port never came up** — ham couldn't get
+  Firefox into debug mode. Check `:checkhealth ham`; make sure `firefox` is on your
   PATH. With `firefox.manage = false`, launch Firefox yourself with
   `firefox --remote-debugging-port 9222`.
 - **Orphaned automation session** — Firefox allows only one WebDriver BiDi session
   and does not reap it if the backend dies uncleanly (a crash / kill), so the port
-  stays up but refuses new connections. nam detects this and **auto-restarts
+  stays up but refuses new connections. ham detects this and **auto-restarts
   Firefox to recover** (once per query, when `firefox.manage` is on); you'll see
   "restarting Firefox to recover…". If it recurs, that's fine — it self-heals.
-- **Tabs didn't reopen after nam restarted Firefox** — enable Firefox's "Open
-  previous windows and tabs" (Settings → General → Startup); nam relies on
+- **Tabs didn't reopen after ham restarted Firefox** — enable Firefox's "Open
+  previous windows and tabs" (Settings → General → Startup); ham relies on
   Firefox's own session restore.
 - **Empty / `⚠ No answer text found`** — Google changed AI Mode's DOM. Update
   `response_selectors` / `followup_selectors` in `backend/browser.js` (or via
@@ -169,7 +169,7 @@ require('nam').setup({
 
 ```
 Neovim (Lua)  ──NDJSON over stdio──▶  Node backend        ──WebDriver BiDi──▶  your Firefox ──▶ google.com AI Mode
-  :Nam UI         jobstart/chansend      backend/server.js    ws://127.0.0.1:9222
+  :Ham UI         jobstart/chansend      backend/server.js    ws://127.0.0.1:9222
 ```
 
 The Lua front end owns the command, the split, and the two buffers. The Node

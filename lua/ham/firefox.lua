@@ -1,4 +1,4 @@
--- Firefox lifecycle manager for nam.
+-- Firefox lifecycle manager for ham.
 --
 -- Firefox's WebDriver BiDi remote agent can only be enabled at *startup* via
 -- --remote-debugging-port; it cannot be toggled on a running instance, and
@@ -6,7 +6,7 @@
 -- (logged-in) Firefox we make sure a debug-enabled instance is running, quitting
 -- and relaunching their normal Firefox when necessary.
 
-local config = require('nam.config')
+local config = require('ham.config')
 
 local M = {}
 
@@ -15,7 +15,7 @@ local uv = vim.uv or vim.loop
 local function notify(msg, level)
   -- May be called from a libuv fast context; nvim_echo is not allowed there.
   vim.schedule(function()
-    vim.notify('[nam] ' .. msg, level or vim.log.levels.INFO)
+    vim.notify('[ham] ' .. msg, level or vim.log.levels.INFO)
   end)
 end
 
@@ -73,7 +73,7 @@ local function dedicated(opts)
   return nil
 end
 
--- Launch nam's Firefox. mode = { headless = bool (default from config), url = str }.
+-- Launch ham's Firefox. mode = { headless = bool (default from config), url = str }.
 local function launch(opts, mode)
   mode = mode or {}
   local headless = mode.headless
@@ -83,7 +83,7 @@ local function launch(opts, mode)
   if prof then
     vim.fn.mkdir(prof, 'p') -- Firefox populates a fresh profile here on first run
     -- --new-instance + a distinct profile ⇒ a SEPARATE instance from the user's
-    -- normal (default-profile) Firefox, so nam never blocks their browsing.
+    -- normal (default-profile) Firefox, so ham never blocks their browsing.
     table.insert(args, '--new-instance')
     table.insert(args, '--profile')
     table.insert(args, prof)
@@ -114,7 +114,7 @@ local function wait_up(host, port, deadline, cb)
   end)
 end
 
--- Poll until the debug port is released (nam's instance owns it, so this signals
+-- Poll until the debug port is released (ham's instance owns it, so this signals
 -- our old instance has exited and the profile lock is free), then a short delay.
 local function wait_port_down(host, port, deadline, done)
   M.is_up(host, port, 400, function(up)
@@ -128,7 +128,7 @@ local function wait_port_down(host, port, deadline, done)
   end)
 end
 
--- Quit ONLY nam's Firefox by matching the debug-port flag on its command line.
+-- Quit ONLY ham's Firefox by matching the debug-port flag on its command line.
 -- The user's normal browsing Firefox never has --remote-debugging-port, so it is
 -- never touched (regardless of profile). pkill skips its own PID.
 local function quit(opts, done)
@@ -151,13 +151,13 @@ local function flip(opts, mode, cb)
   end)
 end
 
--- Ensure a debug-enabled Firefox (nam's instance) is reachable, then cb(true).
+-- Ensure a debug-enabled Firefox (ham's instance) is reachable, then cb(true).
 function M.ensure(cb)
   local opts = config.options
   local host, port = opts.backend.host, opts.backend.port
 
   M.is_up(host, port, 800, function(up)
-    if up then cb(true); return end -- nam's instance already running
+    if up then cb(true); return end -- ham's instance already running
 
     if not opts.firefox.manage then
       cb(false, ('Firefox debug port %s:%d is down. Launch Firefox with '
@@ -167,7 +167,7 @@ function M.ensure(cb)
 
     local deadline = uv.now() + opts.firefox.launch_timeout_ms
 
-    -- Dedicated profile: nam's instance is separate from the user's Firefox, so
+    -- Dedicated profile: ham's instance is separate from the user's Firefox, so
     -- there's no conflict — just launch ours (headless).
     if dedicated(opts) then
       notify('launching Firefox (headless)…')
@@ -176,7 +176,7 @@ function M.ensure(cb)
       return
     end
 
-    -- Default-profile fallback: nam shares the user's profile, so a running Firefox
+    -- Default-profile fallback: ham shares the user's profile, so a running Firefox
     -- (no debug port) must be fully restarted into debug mode (broad kill).
     M.is_running(function(running)
       local function do_launch() launch(opts); wait_up(host, port, deadline, cb) end
@@ -198,7 +198,7 @@ function M.ensure(cb)
   end)
 end
 
--- Force-restart nam's Firefox (used to recover from an orphaned BiDi session where
+-- Force-restart ham's Firefox (used to recover from an orphaned BiDi session where
 -- the port is up but refuses connections). cb(true) once the port is back up.
 function M.restart(cb)
   local opts = config.options
@@ -209,7 +209,7 @@ function M.restart(cb)
   flip(opts, {}, cb) -- default mode (headless)
 end
 
--- One-time Google sign-in: open nam's profile HEADFUL (with the debug port) at AI
+-- One-time Google sign-in: open ham's profile HEADFUL (with the debug port) at AI
 -- Mode so the user logs in; cookies persist in the dedicated profile.
 function M.login(cb)
   local opts = config.options
@@ -227,9 +227,9 @@ function M.to_headless(cb)
   flip(config.options, { headless = true }, cb)
 end
 
--- Quit nam's Firefox (only the instance on the debug port — never the user's
+-- Quit ham's Firefox (only the instance on the debug port — never the user's
 -- browsing Firefox). Called on panel close / nvim exit. Synchronous so it still
--- fires during VimLeavePre. No-op when nam doesn't manage Firefox, or when
+-- fires during VimLeavePre. No-op when ham doesn't manage Firefox, or when
 -- close_on_stop is disabled (keep the headless instance warm).
 function M.close()
   local opts = config.options

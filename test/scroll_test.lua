@@ -13,10 +13,10 @@ local root = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':h:h')
 vim.opt.runtimepath:append(root)
 vim.o.lines = 40
 vim.o.columns = 100
-vim.cmd('runtime plugin/nam.lua')
+vim.cmd('runtime plugin/ham.lua')
 
-require('nam').setup({ firefox = { manage = false }, backend = { port = 9999 }, split = { input_height = 4 } })
-local ui = require('nam.ui')
+require('ham').setup({ firefox = { manage = false }, backend = { port = 9999 }, split = { input_height = 4 } })
+local ui = require('ham.ui')
 ui.open()
 pcall(vim.cmd, 'stopinsert')
 
@@ -26,7 +26,7 @@ for _, w in ipairs(vim.api.nvim_list_wins()) do
   local b = vim.api.nvim_win_get_buf(w)
   local ft = vim.bo[b].filetype
   if ft == 'markdown' then conv = { win = w, buf = b }
-  elseif ft == 'nam-input' then input = { win = w, buf = b } end
+  elseif ft == 'ham-input' then input = { win = w, buf = b } end
 end
 
 local failures = {}

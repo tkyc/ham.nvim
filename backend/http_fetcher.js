@@ -17,6 +17,8 @@
 const BASE = 'https://www.google.com';
 const FF_UA = 'Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0';
 
+const htmlmd = require('./html_markdown');
+
 // ---- token extraction -------------------------------------------------------
 
 // First non-empty `data-<name>="…"` value in an HTML string.
@@ -61,10 +63,52 @@ function decodeEntities(s) {
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
 }
 
-// Pull readable answer text out of a folwr/folif response. The prose lives in the
-// data-subtree="aimc" container; we strip tags and collapse whitespace. (This is a
-// prototype extractor — the real backend can reuse browser.js readAnswer's richer
-// DOM→Markdown once the flow is wired in.)
+// The answer's action toolbar (Good response / Bad response / Export to Docs / the
+// share sheet) can trail the prose as plain text when the raw response renders those
+// labels as <div>s rather than <button>s (which the renderer's SKIP set would drop).
+// These distinctive multi-word markers show where the prose ends, so we cut there.
+// (Single words like "share"/"export" are omitted as too likely to appear in prose.)
+const TOOLBAR_MARKERS = [
+  'Good response', 'Bad response', 'Copy Share public link', 'Export to Docs',
+];
+
+function cutToolbar(text) {
+  const lower = text.toLowerCase();
+  let cut = -1;
+  for (const m of TOOLBAR_MARKERS) {
+    const i = lower.indexOf(m.toLowerCase());
+    if (i !== -1 && (cut === -1 || i < cut)) cut = i;
+  }
+  return cut !== -1 ? text.slice(0, cut).trim() : text;
+}
+
+// Fallback flattener: strip tags and collapse whitespace within the aimc container.
+// Used only if the Markdown render yields nothing (malformed/unexpected HTML).
+function flattenAnswer(html) {
+  const idx = html.indexOf('data-subtree="aimc"');
+  let region = html;
+  if (idx !== -1) {
+    const gt = html.indexOf('>', idx);
+    region = html.slice(gt + 1, gt + 1 + 400000);
+  }
+  return decodeEntities(
+    region
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/data:image\/[a-z+]+;base64,[A-Za-z0-9+/=\\]+/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+  ).replace(/\s+/g, ' ').trim();
+}
+
+// Convert a folwr/folif answer response to Markdown, matching browser mode. Walks the
+// answer region to Markdown (see html_markdown.js) — headings, lists, bold/italic,
+// fenced code, tables, links; citations/boilerplate dropped. Falls back to a flat
+// strip if parsing produces nothing, and trims trailing action-toolbar chrome.
+//
+// We render the REGION after the aimc container's opening tag (bounded, like the flat
+// fallback) rather than the parsed container element: Google's real answer HTML is
+// deeply/imperfectly nested, so the container node can close early in the parse tree —
+// region-slicing sidesteps that and keeps the answer, which sits at the top.
 function extractAnswer(html) {
   const idx = html.indexOf('data-subtree="aimc"');
   let region = html;
@@ -72,15 +116,16 @@ function extractAnswer(html) {
     const gt = html.indexOf('>', idx); // skip past the container's opening tag
     region = html.slice(gt + 1, gt + 1 + 400000);
   }
-  const text = decodeEntities(
-    region
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')      // JS (incl. image-loader calls)
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/data:image\/[a-z+]+;base64,[A-Za-z0-9+/=\\]+/gi, ' ') // inline images
-      .replace(/sn\._setImageSrc\([^)]*\)/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-  ).replace(/\s+/g, ' ').trim();
-  return text;
+  const cleaned = region
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/data:image\/[a-z+]+;base64,[A-Za-z0-9+/=\\]+/gi, '');
+  let out = '';
+  try {
+    out = htmlmd.render(htmlmd.parse(cleaned));
+  } catch (_) { out = ''; }
+  if (!out) out = flattenAnswer(html);
+  return cutToolbar(out);
 }
 
 // ---- HTTP -------------------------------------------------------------------
@@ -88,6 +133,20 @@ function extractAnswer(html) {
 function cookieHeader(cookies) {
   if (typeof cookies === 'string') return cookies;
   return (cookies || []).map((c) => `${c.name}=${c.value}`).join('; ');
+}
+
+// A bot-check / degraded-response error, routed by the backend into the same
+// solver → cookie-refresh recovery as a browser-mode captcha.
+function captchaError(detail) {
+  const e = new Error('Google is not serving AI Mode' + (detail ? ' — ' + detail : '') + ' (bot-check / stale exemption).');
+  e.code = 'ECAPTCHA';
+  return e;
+}
+
+// A real answer response carries the aimc prose container. Its absence (an error
+// page or the degraded shell) means we're blocked — surface it for recovery.
+function ensureAnswerable(body) {
+  if (!body || body.indexOf('data-subtree="aimc"') === -1) throw captchaError('no answer container in response');
 }
 
 async function httpGet(url, ctx) {
@@ -101,7 +160,7 @@ async function httpGet(url, ctx) {
     },
   });
   const body = await res.text();
-  if (/\/sorry\//.test(res.url)) { const e = new Error('Google bot-check (/sorry) — cookies stale, refresh via browser.'); e.code = 'ECAPTCHA'; throw e; }
+  if (/\/sorry\//.test(res.url)) throw captchaError('/sorry redirect');
   return { status: res.status, finalUrl: res.url, body };
 }
 
@@ -167,6 +226,13 @@ class Conversation {
     this.tokens = null; // tokens for the NEXT turn (null ⇒ first turn)
   }
 
+  // Swap the cookie jar (and optionally UA) without touching the token chain, so a
+  // mid-conversation captcha refresh (new GOOGLE_ABUSE_EXEMPTION) keeps context.
+  refreshCookies(cookies, ua) {
+    this.ctx.cookies = cookies;
+    if (ua) this.ctx.ua = ua;
+  }
+
   async ask(query) {
     if (!this.tokens) return this._firstTurn(query);
     return this._followUp(query);
@@ -175,7 +241,13 @@ class Conversation {
   async _firstTurn(query) {
     const scaffold = await httpGet(BASE + '/search?udm=50&q=' + encodeURIComponent(query), this.ctx);
     const tok = extractTokens(scaffold.body);
+    // A scaffold with no async tokens is Google's degraded "shell" page, served when
+    // the GOOGLE_ABUSE_EXEMPTION cookie is stale/expired (a 200, not a /sorry redirect,
+    // so httpGet let it through). Surface it as ECAPTCHA so the backend runs the same
+    // solver → cookie-refresh recovery as a hard bot-check.
+    if (!tok.srtst || !tok.garc) throw captchaError('stale bot-check exemption (token-less page)');
     const ans = await httpGet(buildFolwr(tok, query), this.ctx);
+    ensureAnswerable(ans.body);
     // Chain: keep the scaffold's srtst/ei/stkp/elrc/xsrf (the answer response omits
     // them) and overlay whatever fresh tokens the answer DID carry — crucially mstk,
     // the conversation thread token that gives follow-ups their context.
@@ -185,9 +257,10 @@ class Conversation {
 
   async _followUp(query) {
     const ans = await httpGet(buildFolif(this.tokens, query), this.ctx);
+    ensureAnswerable(ans.body);
     this.tokens = mergeTokens(this.tokens, extractTokens(ans.body));
     return { answer: extractAnswer(ans.body), raw: ans.body };
   }
 }
 
-module.exports = { Conversation, extractTokens, mergeTokens, buildFolwr, buildFolif, extractAnswer, FF_UA };
+module.exports = { Conversation, extractTokens, mergeTokens, buildFolwr, buildFolif, extractAnswer, ensureAnswerable, FF_UA };

@@ -16,6 +16,18 @@ function M.check()
 
   h_start('ham')
 
+  -- query mode
+  local mode = opts.backend.mode or 'browser'
+  if mode == 'http' then
+    h_ok('query mode: http (browserless token-chaining fetcher; Firefox used for cookies + captcha)')
+  elseif mode == 'browser' then
+    h_ok('query mode: browser (drives the AI Mode DOM in headless Firefox)')
+  else
+    h_warn("query mode: '" .. tostring(mode) .. "' is unknown — expected 'browser' or 'http'", {
+      "Set backend.mode to 'browser' or 'http' in setup().",
+    })
+  end
+
   -- node
   if vim.fn.executable(opts.node_cmd) == 1 then
     h_ok('node found: ' .. opts.node_cmd)

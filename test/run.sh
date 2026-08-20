@@ -33,6 +33,7 @@ run "fill_composer (Node) — multi-line query"     node test/fill_composer_test
 run "keep_awake (Node) — visibility spoof"        node test/keep_awake_test.js
 run "captcha_detect (Node) — bot-check detection"  node test/captcha_detect_test.js
 run "http_fetcher (Node) — token chaining"         node test/http_fetcher_test.js
+run "html_markdown (Node) — HTML→Markdown"         node test/html_markdown_test.js
 
 echo "======================================================================"
 echo "  Summary: ${#passed[@]} passed, ${#failed[@]} failed"

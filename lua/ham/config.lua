@@ -67,6 +67,14 @@ M.defaults = {
   backend = {
     host = '127.0.0.1',
     port = 9222,
+    -- How queries are answered:
+    --   'browser' = drive the AI Mode DOM in headless Firefox (default; proven,
+    --               streams incrementally, answers cleaned to markdown).
+    --   'http'    = browserless token-chaining fetcher — plain HTTP GETs to AI
+    --               Mode's async endpoints (faster, DOM-selector-independent, good
+    --               for TTY). Firefox is still used to bootstrap cookies + solve
+    --               captchas; the queries themselves need no browser.
+    mode = 'browser',
     -- ai_mode_url, followup_selectors, response_selectors, timings all default
     -- inside browser.js; add them here to override.
   },

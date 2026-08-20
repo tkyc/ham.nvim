@@ -131,12 +131,29 @@ require('ham').setup({
   backend = {
     host = '127.0.0.1',
     port = 9222,
+    mode = 'browser',        -- 'browser' | 'http'  (see "Query modes" below)
     -- Advanced (see backend/browser.js DEFAULTS): ai_mode_url,
     -- followup_selectors, response_selectors, and timing knobs. Override these
     -- when Google changes AI Mode's markup.
   },
 })
 ```
+
+### Query modes
+
+`backend.mode` chooses how ham fetches answers:
+
+- **`'browser'`** (default) — drives the AI Mode page in headless Firefox. Proven,
+  streams the answer in as it's generated, and renders it as clean markdown.
+- **`'http'`** — a browserless client that talks to AI Mode's async endpoints over
+  plain HTTP (no DOM driving). Faster per query and independent of AI Mode's HTML
+  markup, so it keeps working when Google reshuffles selectors — handy on a bare TTY.
+  The answer arrives in one shot (no incremental streaming) and the text is slightly
+  rougher than browser mode. Firefox is **still** used to bootstrap the login cookies
+  and to solve captchas; only the queries themselves skip the browser.
+
+Both modes need the same logged-in Firefox profile. `:checkhealth ham` shows which
+mode is active.
 
 ## Troubleshooting
 

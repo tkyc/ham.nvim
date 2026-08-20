@@ -66,5 +66,32 @@ check('answer keeps prose', ans.includes('Answer prose here.') && ans.includes('
 check('answer drops container attrs (no data-x)', !ans.includes('noise'));
 check('answer strips base64/script', !/base64|AAAABBBB|setImageSrc/.test(ans));
 
+// Markdown structure + toolbar/citation trimming (parity with browser mode)
+const RESP2 = '<div data-subtree="aimc">'
+  + '<div role="heading">Answer</div>'
+  + '<ul><li>first</li><li>second</li></ul>'
+  + '<p>Monet painted Water Lilies.<a href="https://www.google.com/url?q=w">Wikipedia</a><span>+2</span></p>'
+  + '<div>Good response</div><div>Bad response</div><div>Export to Docs</div></div>';
+const ans2 = hf.extractAnswer(RESP2);
+check('answer renders heading as ###', /(^|\n)### Answer/.test(ans2));
+check('answer renders list as bullets', /(^|\n)- first/.test(ans2) && /(^|\n)- second/.test(ans2));
+check('answer keeps the prose', ans2.includes('Monet painted Water Lilies.'));
+check('answer cuts the action toolbar', !/Good response|Bad response|Export to Docs/.test(ans2));
+check('answer drops the Wikipedia/+2 citation chips', !/Wikipedia/.test(ans2) && !/\+2/.test(ans2));
+
+// --- ensureAnswerable (shell / bot-check detection) ----------------------------
+check('answerable when aimc present', (() => { try { hf.ensureAnswerable('<div data-subtree="aimc">x</div>'); return true; } catch (_) { return false; } })());
+let ecaptcha = null;
+try { hf.ensureAnswerable('<html>Error 400</html>'); } catch (e) { ecaptcha = e; }
+check('token-less shell throws ECAPTCHA', ecaptcha && ecaptcha.code === 'ECAPTCHA');
+
+// --- refreshCookies ------------------------------------------------------------
+const conv = new hf.Conversation({ cookies: 'A=1', ua: 'UA-old' });
+conv.tokens = { mstk: 'AUtExfKEEP', srtst: 'keep' }; // simulate an in-flight conversation
+conv.refreshCookies([{ name: 'GOOGLE_ABUSE_EXEMPTION', value: 'fresh' }], 'UA-new');
+check('refreshCookies swaps the cookie jar', Array.isArray(conv.ctx.cookies) && conv.ctx.cookies[0].value === 'fresh');
+check('refreshCookies updates the UA', conv.ctx.ua === 'UA-new');
+check('refreshCookies preserves the token chain (context)', conv.tokens.mstk === 'AUtExfKEEP');
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

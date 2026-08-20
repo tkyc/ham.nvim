@@ -18,12 +18,23 @@
 
 const readline = require('readline');
 const browserlib = require('./browser');
+const httpFetcher = require('./http_fetcher');
 
 let config = {};
 let browser = null;
 let page = null;
 const queue = [];
 let working = false;
+
+// HTTP mode (config.mode === 'http'): answer over plain HTTP via the token-chaining
+// fetcher instead of driving the DOM. `conversation` holds the multi-turn token
+// chain; `cookieStale` forces a cookie re-harvest after a captcha/Firefox restart.
+let conversation = null;
+let cookieStale = false;
+
+function isHttpMode() {
+  return config.mode === 'http';
+}
 
 function send(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -63,17 +74,55 @@ function isConnDropped(err) {
   return /Connection closed|Target closed|Session.*closed|socket hang up|Protocol error|WebSocket|ECONNRESET|ECONNREFUSED/i.test(m);
 }
 
+// HTTP mode: harvest the profile's cookies + UA from the managed Firefox (one BiDi
+// attach) so the fetcher can authenticate its GETs. Firefox stays up for the next
+// bootstrap / captcha; the queries themselves need no browser.
+async function bootstrapCookies() {
+  await ensureConnected();
+  // Load google.com first so the SESSION cookies (NID/AEC/__Secure-STRP) are in the
+  // jar — a fresh headless launch only has the persistent ones, and without NID
+  // Google serves a token-less shell page that makes the folwr request 400.
+  try {
+    await page.goto('https://www.google.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+  } catch (_) { /* best-effort; harvest whatever is there */ }
+  const cookies = await page.cookies('https://www.google.com');
+  const ua = await page.evaluate(() => navigator.userAgent);
+  return { cookies, ua };
+}
+
+// Lazily build the HTTP conversation, or refresh just its cookies after a captcha /
+// Firefox restart (keeping the token chain so context survives).
+async function ensureConversation() {
+  if (!conversation) {
+    const { cookies, ua } = await bootstrapCookies();
+    conversation = new httpFetcher.Conversation({ cookies, ua });
+  } else if (cookieStale) {
+    const { cookies, ua } = await bootstrapCookies();
+    conversation.refreshCookies(cookies, ua);
+    cookieStale = false;
+  }
+}
+
 async function handleQuery(job) {
   const deadline = Date.now() + 30000;
   for (let attempt = 1; ; attempt++) {
     try {
-      await ensureConnected();
-      const final = await browserlib.ask(browser, page, job.text, config, (partial) => {
-        send({ type: 'chunk', id: job.id, text: partial });
-      });
-      send({ type: 'done', id: job.id, text: final });
+      if (isHttpMode()) {
+        await ensureConversation();
+        const { answer } = await conversation.ask(job.text);
+        send({ type: 'done', id: job.id, text: answer }); // one-shot; no streaming
+      } else {
+        await ensureConnected();
+        const final = await browserlib.ask(browser, page, job.text, config, (partial) => {
+          send({ type: 'chunk', id: job.id, text: partial });
+        });
+        send({ type: 'done', id: job.id, text: final });
+      }
       return;
     } catch (err) {
+      // A captcha (ECAPTCHA) or a Firefox restart under us means the cookie jar the
+      // HTTP conversation holds is stale — re-harvest it on the next attempt/re-send.
+      if (isHttpMode() && (err.code === 'ECAPTCHA' || isConnDropped(err))) cookieStale = true;
       // Firefox was likely restarted under us (captcha/headless flip). Drop the
       // stale handles and retry connecting to the fresh instance for a while
       // before giving up, so the post-captcha re-send actually runs instead of
@@ -120,6 +169,10 @@ async function awaitCaptchaCleared(id) {
 // Start a fresh AI Mode conversation: navigate the driven tab to about:blank so
 // the next query is treated as a first turn (new thread) rather than a follow-up.
 async function resetConversation() {
+  if (isHttpMode()) {
+    conversation = null; // next query starts a fresh first turn (new thread)
+    return;
+  }
   try {
     if (page && !page.isClosed()) {
       await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 10000 });

@@ -227,6 +227,14 @@ function M.to_headless(cb)
   flip(config.options, { headless = true }, cb)
 end
 
+-- Quit ham's Firefox and WAIT for it to fully exit (a clean SIGTERM shutdown flushes
+-- cookies to <profile>/cookies.sqlite), then cb(). Used by http mode after a captcha:
+-- with the fresh exemption now on disk, the re-sent query reads it and no headless
+-- browser is ever launched.
+function M.quit(cb)
+  quit(config.options, cb or function() end)
+end
+
 -- Quit ham's Firefox (only the instance on the debug port — never the user's
 -- browsing Firefox). Called on panel close / nvim exit. Synchronous so it still
 -- fires during VimLeavePre. No-op when ham doesn't manage Firefox, or when

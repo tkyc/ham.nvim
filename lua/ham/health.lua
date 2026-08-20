@@ -19,7 +19,18 @@ function M.check()
   -- query mode
   local mode = opts.backend.mode or 'browser'
   if mode == 'http' then
-    h_ok('query mode: http (browserless token-chaining fetcher; Firefox used for cookies + captcha)')
+    h_ok('query mode: http (browserless token-chaining fetcher; Firefox only for login + captcha)')
+    -- Cookie source: on a dedicated profile, queries read cookies straight from disk.
+    local prof = opts.firefox.profile
+    if prof and prof ~= '' then
+      if vim.fn.filereadable(prof .. '/cookies.sqlite') == 1 then
+        h_ok('cookies: cookies.sqlite found in profile (no Firefox needed for queries)')
+      else
+        h_warn('cookies: no cookies.sqlite in ' .. prof, { 'Run  :Ham login  once to sign in.' })
+      end
+    else
+      h_ok('cookies: shared default profile — harvested from a running Firefox')
+    end
   elseif mode == 'browser' then
     h_ok('query mode: browser (drives the AI Mode DOM in headless Firefox)')
   else

@@ -42,18 +42,29 @@ local function dispatch(msg)
     if h and h.on_done then h.on_done(msg.text or '') end
     if msg.id ~= nil then pending[msg.id] = nil end
   elseif msg.type == 'captcha_cleared' then
-    -- User solved the captcha in the visible window: flip back to headless and
+    -- User solved the captcha in the visible window: get Firefox out of the way and
     -- re-send the original query.
     if h then
       vim.notify('[ham] captcha solved — resuming…', vim.log.levels.INFO)
-      firefox.to_headless(function(ok, err)
+      local function resume(ok, err)
         if ok then
           M._send({ type = 'query', id = msg.id, text = h.text })
         elseif h.on_error then
-          h.on_error('could not return to headless: ' .. (err or '?'))
+          h.on_error('could not resume after captcha: ' .. (err or '?'))
           pending[msg.id] = nil
         end
-      end)
+      end
+      local opts = config.options
+      local http_disk = opts.backend.mode == 'http'
+        and opts.firefox.profile ~= nil and opts.firefox.profile ~= ''
+      if http_disk then
+        -- http mode reads cookies from disk: fully CLOSE Firefox (flushing the fresh
+        -- exemption to cookies.sqlite), then re-send — no headless browser needed.
+        firefox.quit(function() resume(true) end)
+      else
+        -- browser mode (and shared-profile http): flip back to headless to continue.
+        firefox.to_headless(resume)
+      end
     end
   elseif msg.type == 'error' then
     -- Orphaned-session recovery: the port is up but Firefox refuses new BiDi
@@ -86,6 +97,12 @@ local function dispatch(msg)
         end
       end)
       return
+    end
+    -- No cookies on disk yet (http mode, never logged in): point the user at login.
+    if msg.code == 'ENOCOOKIES' then
+      vim.schedule(function()
+        vim.notify('[ham] no saved Google cookies — run  :Ham login  once to sign in.', vim.log.levels.WARN)
+      end)
     end
     if h and h.on_error then
       h.on_error(msg.message or 'unknown error', msg.code)
@@ -177,8 +194,9 @@ local function spawn_backend()
     return
   end
 
-  -- Send config immediately.
-  M._send({ type = 'config', config = opts.backend })
+  -- Send config immediately. Include the Firefox profile dir so the backend can read
+  -- cookies from <profile>/cookies.sqlite in http mode (browserless queries).
+  M._send({ type = 'config', config = vim.tbl_extend('force', {}, opts.backend, { profile = opts.firefox.profile }) })
 end
 
 -- Start the backend if it isn't running. `cb` (optional) fires once it's ready.
@@ -201,6 +219,17 @@ function M.start(cb)
   if vim.fn.filereadable(opts.server_path) == 0 then
     flush_start_failure('backend not found at ' .. opts.server_path)
     vim.notify('[ham] backend not found at ' .. opts.server_path, vim.log.levels.ERROR)
+    return
+  end
+
+  -- HTTP mode on a dedicated profile answers queries from the profile's cookies.sqlite,
+  -- so no Firefox is needed to start — skip launching it. (Firefox is still launched
+  -- later by :Ham login and the captcha solver.) Browser mode, and http mode on the
+  -- shared default profile (profile == ''), still need Firefox up first.
+  local http_diskcookies = opts.backend.mode == 'http'
+    and opts.firefox.profile ~= nil and opts.firefox.profile ~= ''
+  if http_diskcookies then
+    spawn_backend()
     return
   end
 

@@ -17,8 +17,10 @@
 // questions keep their conversation context.
 
 const readline = require('readline');
+const net = require('node:net');
 const browserlib = require('./browser');
 const httpFetcher = require('./http_fetcher');
+const profileCookies = require('./profile_cookies');
 
 let config = {};
 let browser = null;
@@ -74,20 +76,46 @@ function isConnDropped(err) {
   return /Connection closed|Target closed|Session.*closed|socket hang up|Protocol error|WebSocket|ECONNRESET|ECONNREFUSED/i.test(m);
 }
 
-// HTTP mode: harvest the profile's cookies + UA from the managed Firefox (one BiDi
-// attach) so the fetcher can authenticate its GETs. Firefox stays up for the next
-// bootstrap / captcha; the queries themselves need no browser.
-async function bootstrapCookies() {
+// Is something listening on host:port? The debug port is ham-exclusive (only ham's
+// Firefox is launched with --remote-debugging-port), so open ⟺ ham's Firefox is up.
+function portOpen(host, port, timeoutMs = 300) {
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    let done = false;
+    const finish = (ok) => { if (done) return; done = true; sock.destroy(); resolve(ok); };
+    sock.setTimeout(timeoutMs);
+    sock.once('connect', () => finish(true));
+    sock.once('timeout', () => finish(false));
+    sock.once('error', () => finish(false));
+    sock.connect(port, host || '127.0.0.1');
+  });
+}
+
+// Harvest cookies + UA from the managed Firefox over BiDi (one attach). Loads
+// google.com first so the SESSION cookies (NID/AEC/__Secure-STRP) are in the jar —
+// a fresh headless launch only has the persistent ones, and without NID Google serves
+// a token-less shell page that makes the folwr request 400.
+async function harvestViaBrowser() {
   await ensureConnected();
-  // Load google.com first so the SESSION cookies (NID/AEC/__Secure-STRP) are in the
-  // jar — a fresh headless launch only has the persistent ones, and without NID
-  // Google serves a token-less shell page that makes the folwr request 400.
   try {
     await page.goto('https://www.google.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
   } catch (_) { /* best-effort; harvest whatever is there */ }
   const cookies = await page.cookies('https://www.google.com');
   const ua = await page.evaluate(() => navigator.userAgent);
   return { cookies, ua };
+}
+
+// Get the profile's Google cookies + UA. Prefer a live Firefox if one is on the debug
+// port (the captcha solver, or a lingering post-captcha instance) — it has the freshest
+// cookies and avoids a cookies.sqlite flush race. Otherwise read the cookies straight
+// off disk so normal queries need no Firefox at all.
+async function bootstrapCookies() {
+  if (await portOpen(config.host, config.port)) return harvestViaBrowser();
+  const fromDisk = config.profile ? profileCookies.read(config.profile) : null;
+  if (fromDisk) return fromDisk;
+  const e = new Error('No usable cookies — run :Ham login (or set backend.mode=browser).');
+  e.code = 'ENOCOOKIES';
+  throw e;
 }
 
 // Lazily build the HTTP conversation, or refresh just its cookies after a captcha /

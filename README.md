@@ -148,12 +148,17 @@ require('ham').setup({
 - **`'http'`** — a browserless client that talks to AI Mode's async endpoints over
   plain HTTP (no DOM driving). Faster per query and independent of AI Mode's HTML
   markup, so it keeps working when Google reshuffles selectors — handy on a bare TTY.
-  The answer arrives in one shot (no incremental streaming) and the text is slightly
-  rougher than browser mode. Firefox is **still** used to bootstrap the login cookies
-  and to solve captchas; only the queries themselves skip the browser.
+  The answer arrives in one shot (no incremental streaming). On the dedicated profile it
+  reads your Google cookies straight from `<profile>/cookies.sqlite`, so **no Firefox
+  runs to answer queries at all**. Firefox is still launched only for **`:Ham login`**
+  (to create/refresh the cookie DB) and to **solve a captcha** when the bot-check
+  exemption expires. Requires Node with `node:sqlite` (Node 22+); on the shared default
+  profile (`firefox.profile = ''`) it falls back to harvesting cookies from a running
+  Firefox.
 
-Both modes need the same logged-in Firefox profile. `:checkhealth ham` shows which
-mode is active.
+Both modes need the same logged-in Firefox profile. `:checkhealth ham` shows the active
+mode and (in http mode) whether the cookie DB is present. If you haven't logged in yet,
+http mode reports `no usable cookies — run :Ham login`.
 
 ## Troubleshooting
 

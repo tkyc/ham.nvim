@@ -57,8 +57,11 @@ async function ensureConnected() {
     }
   }
   if (!browser) {
-    browser = await browserlib.connect(config);
-    browser.on('disconnected', () => { browser = null; page = null; });
+    const b = await browserlib.connect(config);
+    // Guard: only clear if THIS instance is still current, so a late 'disconnected'
+    // from a just-killed Firefox can't null a freshly-reconnected browser.
+    b.on('disconnected', () => { if (browser === b) { browser = null; page = null; } });
+    browser = b;
   }
   if (!page || page.isClosed()) {
     page = await browserlib.ensurePage(browser, config);
@@ -180,15 +183,20 @@ async function pump() {
   working = false;
 }
 
-// Wait for a captcha the user is solving (in the now-headful window) to clear,
-// then reply so ham can flip back to headless and retry. Reconnects to whatever
-// instance is currently on the debug port (the headful solver window).
+// Wait for a captcha the user is solving (in the now-headful window) to clear, then
+// reply so ham can flip back to headless / close Firefox and retry. The solver flip
+// restarted Firefox, so drop any stale handle and connect fresh to the solver window;
+// awaitCaptchaClear scans its tabs itself, so we don't need (and must not force) a page.
 async function awaitCaptchaCleared(id) {
   try {
-    await ensureConnected();
+    browser = null;
+    page = null;
+    const b = await browserlib.connect(config);
+    b.on('disconnected', () => { if (browser === b) { browser = null; page = null; } });
+    browser = b;
     const cleared = await browserlib.awaitCaptchaClear(browser, 180000);
     if (cleared) send({ type: 'captcha_cleared', id });
-    else fail(id, new Error('captcha still present after waiting'));
+    else fail(id, new Error('captcha not cleared within the time limit'));
   } catch (err) {
     fail(id, err);
   }

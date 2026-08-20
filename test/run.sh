@@ -32,6 +32,7 @@ run "ensure_page (Node) — reuse-vs-new tab"       node test/ensure_page_test.j
 run "fill_composer (Node) — multi-line query"     node test/fill_composer_test.js
 run "keep_awake (Node) — visibility spoof"        node test/keep_awake_test.js
 run "captcha_detect (Node) — bot-check detection"  node test/captcha_detect_test.js
+run "await_captcha (Node) — solved-detection"      node test/await_captcha_test.js
 run "http_fetcher (Node) — token chaining"         node test/http_fetcher_test.js
 run "html_markdown (Node) — HTML→Markdown"         node test/html_markdown_test.js
 run "profile_cookies (Node) — cookies.sqlite read" node test/profile_cookies_test.js

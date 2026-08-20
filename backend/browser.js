@@ -176,22 +176,45 @@ async function detectCaptcha(page) {
 // /sorry interstitial, which isn't an AI Mode page, so ensurePage would hand back
 // a blank tab and we'd wrongly report "cleared" before the user did anything. We
 // only declare success once a captcha has actually been seen AND then disappears.
-async function awaitCaptchaClear(browser, timeoutMs) {
+// A tab whose OWN URL is an AI Mode results page (google …/search?…udm=50…). Used as
+// the "captcha is done" signal. A /sorry page's URL embeds continue=…/search…, so it can
+// match too — but callers check detectCaptcha() first and let captcha win, so /sorry is
+// never treated as solved.
+function isAiModeSearch(url) {
+  return /^https?:\/\/(www\.)?google\.[a-z.]+\/search\b/i.test(url || '') && /[?&]udm=50\b/.test(url || '');
+}
+
+// Wait until the user has cleared the bot-check in the visible solver window. "Cleared"
+// = no tab shows a captcha AND a real AI Mode page is loaded, held stable for two polls.
+// Crucially this does NOT require first witnessing the captcha: the solver flip is slow
+// to start, so the user often solves it before we connect — we then just see the loaded
+// AI Mode page and resume. (A bare about:blank tab is neither captcha nor solved, so we
+// keep waiting rather than false-clear.)
+async function awaitCaptchaClear(browser, timeoutMs, opts) {
+  const pollMs = (opts && opts.pollMs) || 1500;
   const deadline = Date.now() + (timeoutMs || 180000);
-  let sawCaptcha = false;
+  let solvedStreak = 0;
   while (Date.now() < deadline) {
     let pages = [];
     try { pages = await browser.pages(); } catch (_) { pages = []; }
     let anyCaptcha = false;
+    let anySolved = false;
     for (const p of pages) {
-      try { if (await detectCaptcha(p)) { anyCaptcha = true; break; } } catch (_) { /* tab navigating */ }
+      let url = '';
+      try { url = p.url() || ''; } catch (_) { /* tab navigating */ }
+      try {
+        if (await detectCaptcha(p)) anyCaptcha = true;       // captcha takes precedence
+        else if (isAiModeSearch(url)) anySolved = true;
+      } catch (_) { /* tab navigating */ }
     }
     if (anyCaptcha) {
-      sawCaptcha = true;
-    } else if (sawCaptcha) {
-      return true; // a bot-check was present and is now gone → solved
+      solvedStreak = 0;
+    } else if (anySolved) {
+      if (++solvedStreak >= 2) return true;                  // stable ⇒ solved
+    } else {
+      solvedStreak = 0;                                      // only blank/loading tabs → keep waiting
     }
-    await sleep(1500);
+    await sleep(pollMs);
   }
   return false;
 }
@@ -615,5 +638,5 @@ async function ask(browser, page, text, config, onChunk) {
 module.exports = {
   DEFAULTS, mergeConfig, connect, ensurePage, ask, readAnswer, fillComposer,
   installVisibilitySpoof, registerVisibilitySpoof, KEEPALIVE_SCRIPT,
-  detectCaptcha, awaitCaptchaClear,
+  detectCaptcha, awaitCaptchaClear, isAiModeSearch,
 };

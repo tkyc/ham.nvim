@@ -25,6 +25,13 @@ end
 
 -- Called from plugin/ham.lua for the :Ham command.
 function M.login()
+  -- Login launches a visible Firefox on the debug port; doing that while the backend
+  -- is running would kill/replace the instance it's using (or the captcha solver) and
+  -- break the session. Require the panel to be closed first.
+  if backend.is_running() then
+    vim.notify('[ham] close the chat panel first (:Ham close), then run :Ham login.', vim.log.levels.WARN)
+    return
+  end
   require('ham.firefox').login()
 end
 

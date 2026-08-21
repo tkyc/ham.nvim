@@ -47,7 +47,6 @@ const DEFAULTS = {
   submit_button_selector: 'button[aria-label="Send"]',
   nav_timeout_ms: 30000,
   new_turn_timeout_ms: 6000, // wait for a follow-up's answer container to appear
-  connect_timeout_ms: 15000,
   response_timeout_ms: 120000,
   poll_interval_ms: 400,
   // Each finished answer gains an action toolbar; these are the exact aria-labels
@@ -171,15 +170,10 @@ async function detectCaptcha(page) {
   }
 }
 
-// Poll until the user solves the bot-check in the visible window, or a timeout.
-// Scans EVERY tab (not one cached page): the solver window lands on Google's
-// /sorry interstitial, which isn't an AI Mode page, so ensurePage would hand back
-// a blank tab and we'd wrongly report "cleared" before the user did anything. We
-// only declare success once a captcha has actually been seen AND then disappears.
 // A tab whose OWN URL is an AI Mode results page (google …/search?…udm=50…). Used as
-// the "captcha is done" signal. A /sorry page's URL embeds continue=…/search…, so it can
-// match too — but callers check detectCaptcha() first and let captcha win, so /sorry is
-// never treated as solved.
+// the "captcha is done" signal by awaitCaptchaClear. A /sorry page's URL embeds
+// continue=…/search…, but the ^-anchored path check rejects it (its path is /sorry),
+// and callers check detectCaptcha() first anyway — so /sorry is never treated as solved.
 function isAiModeSearch(url) {
   return /^https?:\/\/(www\.)?google\.[a-z.]+\/search\b/i.test(url || '') && /[?&]udm=50\b/.test(url || '');
 }

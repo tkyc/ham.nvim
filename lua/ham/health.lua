@@ -26,7 +26,7 @@ function M.check()
       if vim.fn.filereadable(prof .. '/cookies.sqlite') == 1 then
         h_ok('cookies: cookies.sqlite found in profile (no Firefox needed for queries)')
       else
-        h_warn('cookies: no cookies.sqlite in ' .. prof, { 'Run  :Ham login  once to sign in.' })
+        h_warn('cookies: no cookies.sqlite in ' .. prof, { 'Close the panel (:Ham close), then run  :Ham login  once to sign in.' })
       end
     else
       h_ok('cookies: shared default profile — harvested from a running Firefox')
@@ -75,8 +75,13 @@ function M.check()
   if firefox.is_up_sync(host, port, 800) then
     h_ok(('Firefox debug port reachable at %s:%d'):format(host, port))
   elseif opts.firefox.manage then
-    h_ok(('debug port %s:%d is down — ham will %s Firefox on :ham'):format(
-      host, port, opts.firefox.auto_restart and 'launch/restart' or 'launch'))
+    local http_disk = (opts.backend.mode == 'http') and opts.firefox.profile and opts.firefox.profile ~= ''
+    if http_disk then
+      h_ok(('debug port %s:%d is down — expected in http mode; Firefox launches only for :Ham login and captchas'):format(host, port))
+    else
+      h_ok(('debug port %s:%d is down — ham will %s Firefox on :Ham'):format(
+        host, port, opts.firefox.auto_restart and 'launch/restart' or 'launch'))
+    end
   else
     h_warn(('nothing listening at %s:%d (firefox.manage is off)'):format(host, port), {
       'Launch Firefox yourself with:  firefox --remote-debugging-port ' .. tostring(port),

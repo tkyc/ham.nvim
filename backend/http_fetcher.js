@@ -59,8 +59,9 @@ function extractTokens(html) {
 function decodeEntities(s) {
   return s
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n));
 }
 
 // The answer's action toolbar (Good response / Bad response / Export to Docs / the
@@ -143,25 +144,42 @@ function captchaError(detail) {
   return e;
 }
 
-// A real answer response carries the aimc prose container. Its absence (an error
-// page or the degraded shell) means we're blocked — surface it for recovery.
-function ensureAnswerable(body) {
-  if (!body || body.indexOf('data-subtree="aimc"') === -1) throw captchaError('no answer container in response');
+// A real answer response carries the aimc prose container.
+function isAnswerable(body) {
+  return !!body && body.indexOf('data-subtree="aimc"') !== -1;
 }
 
+// Its absence (an error page or the degraded shell) means we're blocked — surface it
+// for recovery (the backend routes ECAPTCHA into the solver → cookie-refresh flow).
+function ensureAnswerable(body) {
+  if (!isAnswerable(body)) throw captchaError('no answer container in response');
+}
+
+const DEFAULT_TIMEOUT_MS = 30000;
+
 async function httpGet(url, ctx) {
-  const res = await fetch(url, {
-    redirect: 'follow',
-    headers: {
-      'User-Agent': ctx.ua || FF_UA,
-      'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5',
-      'Cookie': cookieHeader(ctx.cookies),
-    },
-  });
-  const body = await res.text();
-  if (/\/sorry\//.test(res.url)) throw captchaError('/sorry redirect');
-  return { status: res.status, finalUrl: res.url, body };
+  const timeoutMs = (ctx && ctx.timeoutMs) || DEFAULT_TIMEOUT_MS;
+  try {
+    const res = await fetch(url, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(timeoutMs), // bound the whole request+body read
+      headers: {
+        'User-Agent': ctx.ua || FF_UA,
+        'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Cookie': cookieHeader(ctx.cookies),
+      },
+    });
+    const body = await res.text();
+    if (/\/sorry\//.test(res.url)) throw captchaError('/sorry redirect');
+    return { status: res.status, finalUrl: res.url, body };
+  } catch (err) {
+    if (err && err.code === 'ECAPTCHA') throw err; // our own /sorry throw — pass through
+    if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`AI Mode request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  }
 }
 
 // ---- URL builders -----------------------------------------------------------
@@ -257,10 +275,18 @@ class Conversation {
 
   async _followUp(query) {
     const ans = await httpGet(buildFolif(this.tokens, query), this.ctx);
-    ensureAnswerable(ans.body);
+    if (!isAnswerable(ans.body)) {
+      // The follow-up token chain (srtst/mstk…) likely expired — folif returned no
+      // answer. Drop it and retry as a fresh first turn: recovers the answer (losing
+      // conversation context) when the cookies are still good. If this is actually a
+      // bot-check, _firstTurn's scaffold has no tokens → it throws ECAPTCHA and the
+      // backend opens the solver — so token-expiry and captcha stay distinct.
+      this.tokens = null;
+      return this._firstTurn(query);
+    }
     this.tokens = mergeTokens(this.tokens, extractTokens(ans.body));
     return { answer: extractAnswer(ans.body), raw: ans.body };
   }
 }
 
-module.exports = { Conversation, extractTokens, mergeTokens, buildFolwr, buildFolif, extractAnswer, ensureAnswerable, FF_UA };
+module.exports = { Conversation, extractTokens, mergeTokens, buildFolwr, buildFolif, extractAnswer, ensureAnswerable, isAnswerable, httpGet, decodeEntities, FF_UA };

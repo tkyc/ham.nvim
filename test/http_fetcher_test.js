@@ -93,5 +93,27 @@ check('refreshCookies swaps the cookie jar', Array.isArray(conv.ctx.cookies) && 
 check('refreshCookies updates the UA', conv.ctx.ua === 'UA-new');
 check('refreshCookies preserves the token chain (context)', conv.tokens.mstk === 'AUtExfKEEP');
 
-console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
-process.exit(failures === 0 ? 0 : 1);
+// --- isAnswerable + hex entity decoding ---------------------------------------
+check('isAnswerable true when aimc present', hf.isAnswerable('<div data-subtree="aimc">x</div>') === true);
+check('isAnswerable false for an error page', hf.isAnswerable('<html>Error 400</html>') === false);
+check('decodeEntities handles hex + decimal', hf.decodeEntities('a &#x27;b&#39; &lt;c&gt;') === "a 'b' <c>");
+
+// --- httpGet request timeout (async): a server that never responds must not hang ---
+(async () => {
+  const net = require('node:net');
+  // Accept the connection but never write a response → fetch would hang without a timeout.
+  const server = net.createServer(() => { /* hold the socket open, send nothing */ });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  const t0 = Date.now();
+  let msg = '';
+  try {
+    await hf.httpGet(`http://127.0.0.1:${port}/x`, { cookies: '', ua: 'x', timeoutMs: 150 });
+  } catch (e) { msg = e.message || String(e); }
+  const elapsed = Date.now() - t0;
+  server.close();
+  check('httpGet times out (does not hang)', /timed out/i.test(msg) && elapsed < 3000);
+
+  console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
+  process.exit(failures === 0 ? 0 : 1);
+})();

@@ -12,6 +12,13 @@ vim.cmd('runtime plugin/ham.lua')
 local ham = require('ham')
 ham.setup({ firefox = { manage = false }, backend = { port = 9999 } })
 local ui = require('ham.ui')
+local backend = require('ham.backend')
+
+-- This suite exercises the UI/command layer, not the real Node backend. Stub
+-- backend.query so send_query populates the transcript without spawning node/Firefox
+-- (which would also fire async start-failures that bleed across tests). Individual
+-- tests below override backend.ping / backend.is_running as needed.
+backend.query = function() return 1 end
 
 -- Count the panel's windows (conversation = markdown, input = ham-input).
 local function ham_wins()
@@ -82,7 +89,76 @@ check(':Ham explain uses the register', conv_text():find('Explain in plain Engli
 Ham('clear')
 check(':Ham clear wipes the transcript', conv_text():find('Explain in plain English. Annotate in a code block with a comment above per line:', 1, true) == nil, true)
 
+-- close() tears down the backend, so it must also drop the transcript AND delete the
+-- scratch buffers (bufhidden='hide' would otherwise leak them across open/close).
+vim.fn.setreg('"', 'local sentinel_close = 1')
+Ham('explain') -- re-adds a message to the transcript
+pcall(vim.cmd, 'stopinsert')
+check('message present before close', conv_text():find('Explain in plain English', 1, true) ~= nil, true)
+local conv_bufs_before = {}
+for _, w in ipairs(vim.api.nvim_list_wins()) do
+  local b = vim.api.nvim_win_get_buf(w)
+  if vim.bo[b].filetype == 'markdown' or vim.bo[b].filetype == 'ham-input' then
+    table.insert(conv_bufs_before, b)
+  end
+end
 Ham('close')
+local leaked = 0
+for _, b in ipairs(conv_bufs_before) do if vim.api.nvim_buf_is_valid(b) then leaked = leaked + 1 end end
+check('close deletes the scratch buffers (no leak)', leaked, 0)
+Ham('') -- reopen
+check('transcript cleared after close→reopen', conv_text():find('Explain in plain English', 1, true) == nil, true)
+
+Ham('close')
+
+-- :Ham login is refused while the backend is running (it would kill the Firefox the
+-- backend uses). Stub firefox.login (so no real browser launches) and backend.is_running.
+local firefox = require('ham.firefox')
+local login_called = false
+firefox.login = function() login_called = true end
+
+local orig_is_running = backend.is_running
+backend.is_running = function() return true end
+login_called = false
+Ham('login')
+check(':Ham login blocked while backend running', login_called, false)
+
+backend.is_running = function() return false end
+login_called = false
+Ham('login')
+check(':Ham login proceeds when backend not running', login_called, true)
+backend.is_running = orig_is_running
+
+-- Liveness watchdog: with the backend stubbed to accept a query but never answer, the
+-- panel would hang forever. The watchdog unsticks it only when the backend stops
+-- responding to pings; while it still pongs (busy/slow/captcha) it keeps waiting.
+ui._watchdog.interval_ms = 10
+ui._watchdog.pong_ms = 10
+local orig_query = backend.query
+local orig_ping = backend.ping
+backend.query = function(_, _) return 1 end -- accept, never call handlers → stays awaiting
+
+-- Case A: backend does not pong → watchdog fires and unsticks the panel.
+backend.ping = function(_) return true end -- never calls the pong cb
+Ham('') -- ensure open
+vim.fn.setreg('"', 'watchdog probe')
+Ham('explain')
+pcall(vim.cmd, 'stopinsert')
+vim.wait(500, function() return conv_text():find('stopped responding', 1, true) ~= nil end, 10)
+check('watchdog fires when backend stops responding', conv_text():find('stopped responding', 1, true) ~= nil, true)
+
+-- Case B: backend pongs → watchdog keeps waiting, does NOT unstick.
+Ham('clear') -- reset transcript + awaiting
+backend.ping = function(cb) if cb then cb() end; return true end -- pong immediately
+vim.fn.setreg('"', 'watchdog probe two')
+Ham('explain')
+pcall(vim.cmd, 'stopinsert')
+vim.wait(150) -- several tick cycles
+check('watchdog does NOT fire while backend pongs', conv_text():find('stopped responding', 1, true) == nil, true)
+
+Ham('clear') -- awaiting → false, stops the running watchdog
+backend.query = orig_query
+backend.ping = orig_ping
 
 if #failures == 0 then
   print('\nALL PASS')

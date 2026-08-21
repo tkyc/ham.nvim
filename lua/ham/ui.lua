@@ -16,6 +16,10 @@ local state = {
   awaiting = false, -- a query is in flight
 }
 
+-- Bumped on every open(); lets a deferred timer tell whether it belongs to the
+-- current panel or a since-closed one (avoids a stale timer touching a new panel).
+local open_generation = 0
+
 local function win_valid(w)
   return w and vim.api.nvim_win_is_valid(w)
 end
@@ -121,11 +125,38 @@ local function last_query()
   return nil
 end
 
+-- Liveness watchdog: while a query is awaiting, periodically ping the backend. The
+-- backend pongs even while busy (slow answer, or waiting on a captcha you're solving),
+-- so we only unstick the panel if it stops responding entirely — a genuine wedge. A
+-- dead process is already handled by on_exit, so this covers the alive-but-stuck case.
+-- Timings (exposed so tests can shorten them). pong_ms must clear the backend's only
+-- synchronous work (parsing a large answer) so we never false-fire on a busy backend.
+M._watchdog = { interval_ms = 20000, pong_ms = 8000 }
+local function start_watchdog(seq)
+  local function current() return state.awaiting and state.query_seq == seq end
+  local function tick()
+    if not current() then return end -- answered, superseded, or panel closed
+    local ponged = false
+    backend.ping(function() ponged = true end)
+    vim.defer_fn(function()
+      if not current() then return end
+      if ponged then
+        vim.defer_fn(tick, M._watchdog.interval_ms) -- alive → keep waiting, re-check later
+      else
+        state.awaiting = false
+        set_last_ai('⚠ backend stopped responding — try /retry, or :Ham close and reopen.')
+      end
+    end, M._watchdog.pong_ms)
+  end
+  vim.defer_fn(tick, M._watchdog.interval_ms)
+end
+
 -- Append a new turn for `text` and send it to the backend.
 local function send_query(text)
   table.insert(state.messages, { role = 'you', text = text })
   table.insert(state.messages, { role = 'ai', text = '' })
   state.awaiting = true
+  state.query_seq = (state.query_seq or 0) + 1
   redraw()
   scroll_new_turn_to_top() -- put the new question at the top; answer fills below
 
@@ -140,6 +171,8 @@ local function send_query(text)
       state.awaiting = false
     end,
   })
+
+  start_watchdog(state.query_seq)
 end
 
 -- Re-ask the last question (also the /retry command and :Ham retry).
@@ -290,17 +323,21 @@ function M.open()
   apply_win_opts(state.input_win)
 
   set_keymaps()
+  open_generation = open_generation + 1
+  local gen = open_generation
   state.starting = true
   redraw()
 
   -- Bring up Firefox (may restart it) + the backend so the first query is fast.
   backend.start(function()
+    if open_generation ~= gen then return end -- panel was closed/reopened since
     state.starting = false
     redraw()
   end)
-  -- Safety net: clear the spinner even if startup fails (ready cb won't fire).
+  -- Safety net: clear the spinner even if startup fails (ready cb won't fire). Guard
+  -- with the generation so a stale timer can't touch a since-reopened panel.
   vim.defer_fn(function()
-    if state.starting then
+    if open_generation == gen and state.starting then
       state.starting = false
       redraw()
     end
@@ -316,11 +353,21 @@ end
 function M.close()
   if win_valid(state.input_win) then pcall(vim.api.nvim_win_close, state.input_win, true) end
   if win_valid(state.conv_win) then pcall(vim.api.nvim_win_close, state.conv_win, true) end
+  -- Wipe the scratch buffers (bufhidden='hide' would otherwise leave them lingering
+  -- in memory across every open/close cycle).
+  if buf_valid(state.input_buf) then pcall(vim.api.nvim_buf_delete, state.input_buf, { force = true }) end
+  if buf_valid(state.conv_buf) then pcall(vim.api.nvim_buf_delete, state.conv_buf, { force = true }) end
   state.conv_win = nil
   state.input_win = nil
+  state.conv_buf = nil
+  state.input_buf = nil
   state.awaiting = false
+  state.starting = false
   -- Full teardown: stop the Node backend (which cleanly ends its Firefox session)
-  -- and quit ham's headless Firefox. Reopening with :Ham relaunches both.
+  -- and quit ham's headless Firefox. Reopening with :Ham relaunches both — so drop
+  -- the transcript too, otherwise the reopened panel would show a conversation the
+  -- fresh backend has no memory of.
+  state.messages = {}
   backend.stop()
   firefox.close()
 end

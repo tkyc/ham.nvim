@@ -13,6 +13,7 @@ local stdout_buf = ''
 local next_id = 0
 local pending = {} -- id -> { on_chunk, on_done, on_error }
 local on_ready_cbs = {}
+local pong_cbs = {} -- callbacks waiting for the next pong (liveness check)
 
 local function decode(line)
   local ok, obj = pcall(vim.json.decode, line)
@@ -31,6 +32,9 @@ local function dispatch(msg)
   end
 
   if msg.type == 'pong' then
+    local cbs = pong_cbs
+    pong_cbs = {}
+    for _, cb in ipairs(cbs) do pcall(cb) end
     return
   end
 
@@ -101,7 +105,7 @@ local function dispatch(msg)
     -- No cookies on disk yet (http mode, never logged in): point the user at login.
     if msg.code == 'ENOCOOKIES' then
       vim.schedule(function()
-        vim.notify('[ham] no saved Google cookies — run  :Ham login  once to sign in.', vim.log.levels.WARN)
+        vim.notify('[ham] no saved Google cookies — close the panel (:Ham close), then run :Ham login.', vim.log.levels.WARN)
       end)
     end
     if h and h.on_error then
@@ -249,6 +253,15 @@ function M._send(obj)
   if not job then return false end
   vim.fn.chansend(job, vim.json.encode(obj) .. '\n')
   return true
+end
+
+-- Liveness probe: send a ping; `cb()` fires when the backend pongs. The backend
+-- answers pings even while busy on a query (its event loop is free during awaits),
+-- so a missing pong means it's genuinely wedged — not just slow or awaiting a captcha.
+function M.ping(cb)
+  if not job then return false end
+  if cb then table.insert(pong_cbs, cb) end
+  return M._send({ type = 'ping' })
 end
 
 -- Ask a question. handlers = { on_chunk = fn(text), on_done = fn(text), on_error = fn(msg, code) }

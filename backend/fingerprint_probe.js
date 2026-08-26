@@ -64,9 +64,7 @@ function classify(finalUrl, body) {
 }
 const isOk = (c) => c.startsWith('ANSWER');
 
-function cookieHeader(cookies) {
-  return cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-}
+const cookieHeader = hf.cookieHeader; // shared with the http-mode fetcher
 
 async function viaFetch(cookies, ua) {
   const res = await fetch(URL, {

@@ -142,8 +142,10 @@ local function on_stderr(_, data)
   if not data then return end
   local text = vim.trim(table.concat(data, '\n'))
   if text ~= '' then
-    -- Backend logs progress on stderr; keep it quiet unless it looks like a real error.
-    if text:lower():find('error') then
+    -- Backend logs progress on stderr; keep it quiet unless a line looks like a real
+    -- error (avoids surfacing benign lines that merely contain the word, e.g. "0 errors").
+    local low = text:lower()
+    if low:match('error[:%s]') or low:find('exception') or low:find('unhandled') then
       vim.schedule(function()
         vim.notify('[ham] ' .. text, vim.log.levels.WARN)
       end)
@@ -151,7 +153,11 @@ local function on_stderr(_, data)
   end
 end
 
-local function on_exit(_, code)
+local function on_exit(id, code)
+  -- If a newer backend has since started (stop → restart within the exit latency),
+  -- this exit belongs to the OLD process — ignore it so we don't clear the new
+  -- backend's ready flag or fail its freshly-queued pending handlers.
+  if job ~= nil and id ~= job then return end
   local deliberate = stopping
   vim.schedule(function()
     if code ~= 0 and not deliberate then
@@ -185,6 +191,7 @@ end
 -- Actually spawn the Node backend (called once Firefox is confirmed reachable).
 local function spawn_backend()
   local opts = config.options
+  stopping = false -- fresh process; clear any leftover deliberate-stop flag
   job = vim.fn.jobstart({ opts.node_cmd, opts.server_path }, {
     on_stdout = on_stdout,
     on_stderr = on_stderr,
@@ -284,6 +291,12 @@ function M.query(text, handlers)
   return id
 end
 
+-- Drop a specific query's handlers so a late/abandoned backend reply can no longer
+-- render into the UI (used by the watchdog when it gives up on a wedged query).
+function M.cancel(id)
+  if id ~= nil then pending[id] = nil end
+end
+
 -- Reset the AI Mode conversation: drop any in-flight query callbacks (their
 -- results would render into the just-cleared window) and tell the backend to
 -- start a fresh conversation on the next query.
@@ -293,6 +306,10 @@ function M.reset()
   end
   if ready then
     M._send({ type = 'reset' })
+  else
+    -- Backend still starting: defer the reset to on-ready, otherwise it's dropped and
+    -- the first query continues the previous thread instead of a fresh one.
+    table.insert(on_ready_cbs, function() M._send({ type = 'reset' }) end)
   end
 end
 

@@ -12,6 +12,10 @@ local M = {}
 
 local uv = vim.uv or vim.loop
 
+-- AI Mode page opened headful for one-time login and for solving a captcha. A benign
+-- query so the page loads AI Mode (and any pending bot-check) for the user.
+local LOGIN_URL = 'https://www.google.com/search?udm=50&q=hello'
+
 local function notify(msg, level)
   -- May be called from a libuv fast context; nvim_echo is not allowed there.
   vim.schedule(function()
@@ -214,12 +218,12 @@ end
 function M.login(cb)
   local opts = config.options
   notify('opening Firefox — sign into Google, then close the window.')
-  flip(opts, { headless = false, url = 'https://www.google.com/search?udm=50&q=hello' }, cb or function() end)
+  flip(opts, { headless = false, url = LOGIN_URL }, cb or function() end)
 end
 
 -- Captcha handling: open a VISIBLE window (headful) so the user can solve it…
 function M.open_solver(cb)
-  flip(config.options, { headless = false, url = 'https://www.google.com/search?udm=50&q=hello' }, cb)
+  flip(config.options, { headless = false, url = LOGIN_URL }, cb)
 end
 
 -- …then return to headless once it's solved.

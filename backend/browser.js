@@ -142,6 +142,9 @@ const AI_MODE_DOM = '[data-subtree="aimc"], #aim-mars-input-plate, '
 async function isAiModePage(page) {
   let url = '';
   try { url = page.url() || ''; } catch (_) { return false; }
+  // A /sorry captcha URL embeds continue=<the search URL>, so it can contain udm=50 —
+  // reject it before the fast path so a captcha tab is never mistaken for AI Mode.
+  if (/\/sorry\/|\/recaptcha\//.test(url)) return false;
   if (/[?&]udm=50\b/.test(url)) return true; // fast path: AI Mode URL
   // Otherwise sniff the DOM (udm=50 can drop from the URL after interaction). Skip
   // schemes that can't be AI Mode and may not be evaluable (about:, chrome:, …).
@@ -216,7 +219,7 @@ async function awaitCaptchaClear(browser, timeoutMs, opts) {
 // Return a tab for ham to drive (cached by the backend for the session, so this
 // runs once). Reuse an existing Google AI Mode tab if the user already has one
 // open — so ham continues that conversation — otherwise open a fresh tab.
-async function ensurePage(browser, config) {
+async function ensurePage(browser) {
   let pages = [];
   try { pages = await browser.pages(); } catch (_) { pages = []; }
   for (const p of pages) {
@@ -254,7 +257,7 @@ async function firstMatch(page, selectors, timeout) {
   while (Date.now() < deadline) {
     for (const sel of selectors) {
       const el = await page.$(sel);
-      if (el) return { el, selector: sel };
+      if (el) return el;
     }
     await sleep(200);
   }
@@ -452,11 +455,22 @@ async function readAnswer(page, selectors, index) {
       return out.join('\n').replace(/\n{4,}/g, '\n\n\n').trim();
     }
 
-    // Read the container at `idx` from the first selector that reaches it. If it
-    // isn't there yet, return '' (keep waiting) rather than an earlier turn.
+    // Read the current turn's answer from the first selector that reaches `idx`. Turns
+    // are serialized, so every container from `idx` onward belongs to THIS turn — read
+    // all of them (not just nodes[idx]), so an answer that renders as more than one
+    // container isn't silently truncated to its first block. In the common one-container-
+    // per-turn case this is exactly nodes[idx]. If idx isn't there yet, return '' (keep
+    // waiting) rather than falling back to an earlier turn.
     for (const sel of sels) {
       const nodes = document.querySelectorAll(sel);
-      if (nodes.length > idx) return toMarkdown(nodes[idx]);
+      if (nodes.length > idx) {
+        const parts = [];
+        for (let k = idx; k < nodes.length; k++) {
+          const md = toMarkdown(nodes[k]);
+          if (md) parts.push(md);
+        }
+        return parts.join('\n\n');
+      }
     }
     return '';
   }, [selectors, index || 0]);
@@ -503,18 +517,19 @@ async function countToolbars(page, cfg) {
   }
 }
 
-// Wait for a specific answer (the container at `index`) to finish, calling
-// onChunk(partialText) as it grows. Finishes only when its text is stable AND the
-// number of completion toolbars has grown past `toolbarBaseline` — i.e. THIS
-// answer gained its own toolbar. That survives mid-stream pauses and, unlike a
-// per-turn toolbar check, works for follow-ups (turns share a container). Falls
-// back to a long text-idle if the toolbar signal ever fails.
+// A bot-check / captcha error, keyed off by the Lua side to open the solver window.
 function captchaError() {
   const e = new Error('Google is showing a captcha / bot check.');
   e.code = 'ECAPTCHA';
   return e;
 }
 
+// Wait for a specific answer (the container at `index`) to finish, calling
+// onChunk(partialText) as it grows. Finishes only when its text is stable AND the
+// number of completion toolbars has grown past `toolbarBaseline` — i.e. THIS
+// answer gained its own toolbar. That survives mid-stream pauses and, unlike a
+// per-turn toolbar check, works for follow-ups (turns share a container). Falls
+// back to a long text-idle if the toolbar signal ever fails.
 async function waitForAnswer(page, cfg, onChunk, index, toolbarBaseline) {
   const deadline = Date.now() + cfg.response_timeout_ms;
   let last = '';
@@ -597,15 +612,15 @@ async function ask(browser, page, text, config, onChunk) {
   // toolbar count grows past `toolbarBaseline`.
   const before = await countAnswers(page, cfg.response_selectors);
   const toolbarBaseline = await countToolbars(page, cfg);
-  const found = await firstMatch(page, cfg.followup_selectors, 8000);
-  if (!found) {
+  const composer = await firstMatch(page, cfg.followup_selectors, 8000);
+  if (!composer) {
     throw new Error(
       'Could not find the AI Mode follow-up input — update followup_selectors ' +
       '(see backend/browser.js).'
     );
   }
-  await found.el.click();
-  await fillComposer(page, found.el, text);
+  await composer.click();
+  await fillComposer(page, composer, text);
   await page.keyboard.press('Enter');
 
   // Enter usually submits; if no new answer container appears, click Send.

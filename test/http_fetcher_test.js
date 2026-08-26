@@ -114,6 +114,16 @@ check('decodeEntities handles hex + decimal', hf.decodeEntities('a &#x27;b&#39; 
   server.close();
   check('httpGet times out (does not hang)', /timed out/i.test(msg) && elapsed < 3000);
 
+  // token extraction skips an empty placeholder earlier than the real value
+  check('dataAttr skips empty placeholder', hf.extractTokens('<a data-ei=""></a><b data-ei="REAL"></b>').ei === 'REAL');
+
+  // toolbar trimming: keep a marker phrase that appears mid-prose, strip a real
+  // trailing toolbar (marker on its own line)
+  check('extractAnswer keeps mid-prose "good response"',
+    hf.extractAnswer('<div data-subtree="aimc">A good response to stress is rest.</div>').includes('good response to stress'));
+  check('extractAnswer strips trailing toolbar',
+    !hf.extractAnswer('<div data-subtree="aimc"><p>The answer.</p><div>Good response</div><div>Bad response</div></div>').toLowerCase().includes('bad response'));
+
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
 })();

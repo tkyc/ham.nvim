@@ -25,8 +25,8 @@ function makeProfile(cookies, version) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ham-prof-'));
   const db = new DatabaseSync(path.join(dir, 'cookies.sqlite'));
   db.exec("CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, originAttributes TEXT NOT NULL DEFAULT '', name TEXT, value TEXT, host TEXT, path TEXT, expiry INTEGER)");
-  const ins = db.prepare('INSERT INTO moz_cookies (originAttributes,name,value,host) VALUES (?,?,?,?)');
-  for (const c of cookies) ins.run(c.oa || '', c.name, c.value, c.host || '.google.com');
+  const ins = db.prepare('INSERT INTO moz_cookies (originAttributes,name,value,host,expiry) VALUES (?,?,?,?,?)');
+  for (const c of cookies) ins.run(c.oa || '', c.name, c.value, c.host || '.google.com', c.expiry == null ? null : c.expiry);
   db.close();
   if (version) fs.writeFileSync(path.join(dir, 'compatibility.ini'), `[Compatibility]\nLastVersion=${version}\n`);
   return dir;
@@ -58,6 +58,22 @@ check('null when profileDir empty/nil', pc.read('') === null && pc.read(null) ==
 // 4. UA fallback
 check('deriveUA falls back to DEFAULT_UA without compatibility.ini',
   pc.deriveUA(fs.mkdtempSync(path.join(os.tmpdir(), 'ham-noini-'))) === pc.DEFAULT_UA);
+
+// 5. expired GOOGLE_ABUSE_EXEMPTION -> filtered out -> treated as not usable (null)
+const past = Math.floor(Date.now() / 1000) - 3600;
+const future = Math.floor(Date.now() / 1000) + 3600;
+const dir5 = makeProfile([
+  { name: 'NID', value: 'x', host: '.google.com', expiry: future },
+  { name: 'GOOGLE_ABUSE_EXEMPTION', value: 'stale', host: '.google.com', expiry: past },
+], '153.0');
+check('null when GOOGLE_ABUSE_EXEMPTION is expired', pc.read(dir5) === null);
+
+// 6. session cookies (expiry 0 / null) are kept, not dropped as "expired"
+const dir6 = makeProfile([
+  { name: 'NID', value: 'sess', host: '.google.com', expiry: 0 },
+  { name: 'GOOGLE_ABUSE_EXEMPTION', value: 'sess', host: '.google.com', expiry: future },
+], '153.0');
+check('keeps session cookies (expiry 0)', !!(pc.read(dir6) && pc.read(dir6).cookies.some((c) => c.name === 'NID')));
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

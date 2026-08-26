@@ -76,5 +76,12 @@ check('find locates aimc container', (() => {
   return c && md.render(c).includes('ANS');
 })());
 
+// a malformed out-of-range numeric entity must not throw (clamped, not fromCodePoint)
+check('huge numeric entity does not crash', (() => {
+  try { md.render(md.parse('<p>x &#9999999999; y</p>')); return true; } catch (_) { return false; }
+})());
+// an already-escaped entity decodes once, not twice: &amp;lt; -> literal "&lt;", not "<"
+check('no double-decode of &amp;lt;', md.render(md.parse('<p>a &amp;lt; b</p>')) === 'a &lt; b');
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

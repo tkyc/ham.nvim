@@ -42,10 +42,16 @@ function read(profileDir) {
     // Unpartitioned (originAttributes='') top-level google cookies — what a request to
     // www.google.com carries. '.google.com' = domain cookies, 'www.google.com' = host.
     const rows = db.prepare(
-      "SELECT name, value FROM moz_cookies "
+      "SELECT name, value, expiry FROM moz_cookies "
       + "WHERE (host = '.google.com' OR host = 'www.google.com') AND originAttributes = ''"
     ).all();
-    const cookies = rows.map((r) => ({ name: r.name, value: r.value }));
+    // Drop clearly-expired persistent cookies. Firefox stores expiry in unix seconds;
+    // null / 0 marks a session cookie (no expiry) which we keep. Without this an expired
+    // GOOGLE_ABUSE_EXEMPTION still passes the presence check below, so we'd think we're
+    // logged in and send a dead exemption (→ token-less shell).
+    const now = Math.floor(Date.now() / 1000);
+    const live = rows.filter((r) => r.expiry == null || r.expiry === 0 || r.expiry > now);
+    const cookies = live.map((r) => ({ name: r.name, value: r.value }));
     const names = new Set(cookies.map((c) => c.name));
     // Without these two, requests get the token-less shell / bot-check → not logged in.
     if (!names.has('NID') || !names.has('GOOGLE_ABUSE_EXEMPTION')) return null;

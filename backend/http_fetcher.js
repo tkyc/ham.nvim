@@ -21,9 +21,12 @@ const htmlmd = require('./html_markdown');
 
 // ---- token extraction -------------------------------------------------------
 
-// First non-empty `data-<name>="…"` value in an HTML string.
+// First NON-EMPTY `data-<name>="…"` value in an HTML string. Skipping empties matters:
+// an empty placeholder (e.g. data-ei="") earlier in the page than the real token would
+// otherwise mask it, dropping the token from the next request's URL.
 function dataAttr(html, name) {
-  const m = html.match(new RegExp('data-' + name.replace(/[-]/g, '\\-') + '="([^"]*)"'));
+  const re = new RegExp('data-' + name + '="([^"]+)"');
+  const m = html.match(re);
   return m ? m[1] : null;
 }
 
@@ -56,13 +59,9 @@ function extractTokens(html) {
 
 // ---- answer extraction ------------------------------------------------------
 
-function decodeEntities(s) {
-  return s
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ')
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n));
-}
+// Single shared implementation (see html_markdown.js): decodes named + numeric
+// entities with out-of-range code points clamped, so a malformed entity can't throw.
+const decodeEntities = htmlmd.decodeEntities;
 
 // The answer's action toolbar (Good response / Bad response / Export to Docs / the
 // share sheet) can trail the prose as plain text when the raw response renders those
@@ -77,28 +76,45 @@ function cutToolbar(text) {
   const lower = text.toLowerCase();
   let cut = -1;
   for (const m of TOOLBAR_MARKERS) {
-    const i = lower.indexOf(m.toLowerCase());
-    if (i !== -1 && (cut === -1 || i < cut)) cut = i;
+    const ml = m.toLowerCase();
+    // Only treat a marker as toolbar chrome when it starts its own line (real answers
+    // don't put "Good response"/"Export to Docs" mid-sentence). This avoids truncating
+    // prose that happens to contain "a good response to…". Scan lines, not substrings.
+    let from = 0;
+    while (true) {
+      const i = lower.indexOf(ml, from);
+      if (i === -1) break;
+      const atLineStart = i === 0 || lower[i - 1] === '\n';
+      if (atLineStart && (cut === -1 || i < cut)) { cut = i; break; }
+      from = i + ml.length;
+    }
   }
   return cut !== -1 ? text.slice(0, cut).trim() : text;
+}
+
+// The bounded slice after the aimc container's opening tag (the answer prose sits at
+// the top). Bounded rather than the parsed container element because Google's answer
+// HTML is deeply/imperfectly nested and the container node can close early in a parse.
+function aimcRegion(html) {
+  const idx = html.indexOf('data-subtree="aimc"');
+  if (idx === -1) return html;
+  const gt = html.indexOf('>', idx); // skip past the container's opening tag
+  return html.slice(gt + 1, gt + 1 + 400000);
+}
+
+// Drop script/style bodies and inlined base64 images from a region.
+function stripNoise(region) {
+  return region
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/data:image\/[a-z+]+;base64,[A-Za-z0-9+/=\\]+/gi, ' ');
 }
 
 // Fallback flattener: strip tags and collapse whitespace within the aimc container.
 // Used only if the Markdown render yields nothing (malformed/unexpected HTML).
 function flattenAnswer(html) {
-  const idx = html.indexOf('data-subtree="aimc"');
-  let region = html;
-  if (idx !== -1) {
-    const gt = html.indexOf('>', idx);
-    region = html.slice(gt + 1, gt + 1 + 400000);
-  }
-  return decodeEntities(
-    region
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/data:image\/[a-z+]+;base64,[A-Za-z0-9+/=\\]+/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-  ).replace(/\s+/g, ' ').trim();
+  return decodeEntities(stripNoise(aimcRegion(html)).replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ').trim();
 }
 
 // Convert a folwr/folif answer response to Markdown, matching browser mode. Walks the
@@ -111,16 +127,7 @@ function flattenAnswer(html) {
 // deeply/imperfectly nested, so the container node can close early in the parse tree —
 // region-slicing sidesteps that and keeps the answer, which sits at the top.
 function extractAnswer(html) {
-  const idx = html.indexOf('data-subtree="aimc"');
-  let region = html;
-  if (idx !== -1) {
-    const gt = html.indexOf('>', idx); // skip past the container's opening tag
-    region = html.slice(gt + 1, gt + 1 + 400000);
-  }
-  const cleaned = region
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/data:image\/[a-z+]+;base64,[A-Za-z0-9+/=\\]+/gi, '');
+  const cleaned = stripNoise(aimcRegion(html));
   let out = '';
   try {
     out = htmlmd.render(htmlmd.parse(cleaned));
@@ -172,6 +179,12 @@ async function httpGet(url, ctx) {
     });
     const body = await res.text();
     if (/\/sorry\//.test(res.url)) throw captchaError('/sorry redirect');
+    // A throttle (429) or transient server error is NOT a bot-check — surface it as a
+    // plain (uncoded) error so the backend reports it instead of burning a captcha
+    // solve / cookie re-harvest on the token-less body these responses carry.
+    if (res.status === 429 || res.status >= 500) {
+      throw new Error(`AI Mode returned HTTP ${res.status} (rate-limited or temporary server error) — try again shortly.`);
+    }
     return { status: res.status, finalUrl: res.url, body };
   } catch (err) {
     if (err && err.code === 'ECAPTCHA') throw err; // our own /sorry throw — pass through
@@ -274,13 +287,24 @@ class Conversation {
   }
 
   async _followUp(query) {
-    const ans = await httpGet(buildFolif(this.tokens, query), this.ctx);
+    // Without mstk (the thread token) folif can't carry context anyway — start a fresh
+    // first turn deliberately rather than silently sending a context-free follow-up.
+    if (!this.tokens.mstk) {
+      this.tokens = null;
+      return this._firstTurn(query);
+    }
+    let ans = await httpGet(buildFolif(this.tokens, query), this.ctx);
     if (!isAnswerable(ans.body)) {
-      // The follow-up token chain (srtst/mstk…) likely expired — folif returned no
-      // answer. Drop it and retry as a fresh first turn: recovers the answer (losing
-      // conversation context) when the cookies are still good. If this is actually a
-      // bot-check, _firstTurn's scaffold has no tokens → it throws ECAPTCHA and the
-      // backend opens the solver — so token-expiry and captcha stay distinct.
+      // Retry folif once: a transient shell (the answer just wasn't ready) shouldn't
+      // cost the whole conversation. Keep the tokens for this second attempt.
+      ans = await httpGet(buildFolif(this.tokens, query), this.ctx);
+    }
+    if (!isAnswerable(ans.body)) {
+      // Still nothing — the follow-up token chain (srtst/mstk…) likely expired. Drop it
+      // and retry as a fresh first turn: recovers the answer (losing conversation
+      // context) when the cookies are still good. If this is actually a bot-check,
+      // _firstTurn's scaffold has no tokens → it throws ECAPTCHA and the backend opens
+      // the solver — so token-expiry and captcha stay distinct.
       this.tokens = null;
       return this._firstTurn(query);
     }
@@ -289,4 +313,4 @@ class Conversation {
   }
 }
 
-module.exports = { Conversation, extractTokens, mergeTokens, buildFolwr, buildFolif, extractAnswer, ensureAnswerable, isAnswerable, httpGet, decodeEntities, FF_UA };
+module.exports = { Conversation, extractTokens, mergeTokens, buildFolwr, buildFolif, extractAnswer, ensureAnswerable, isAnswerable, httpGet, cookieHeader, decodeEntities, FF_UA };

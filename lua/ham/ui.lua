@@ -40,15 +40,13 @@ local function render_lines()
   end
 
   if #state.messages == 0 then
-    local lines = {
-      '',
-    }
+    local empty = { '' }
     if state.starting then
-      table.insert(lines, '⏳ Starting Firefox in debug mode…')
-      table.insert(lines, '   (first run may restart your browser to attach)')
-      table.insert(lines, '')
+      table.insert(empty, '⏳ Starting Firefox in debug mode…')
+      table.insert(empty, '   (first run may restart your browser to attach)')
+      table.insert(empty, '')
     end
-    return lines
+    return empty
   end
 
   for _, m in ipairs(state.messages) do
@@ -99,22 +97,23 @@ local function set_last_ai(text)
   redraw()
 end
 
+local function clear_input()
+  if buf_valid(state.input_buf) then
+    vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { '' })
+  end
+end
+
 -- Wipe the conversation window and start a fresh AI Mode conversation.
 function M.clear()
   if not M.is_open() then M.open() end
   state.messages = {}
   state.awaiting = false
-  if buf_valid(state.input_buf) then
-    vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { '' })
-  end
+  -- Supersede any in-flight query so its late reply can't render into the cleared
+  -- transcript (backend.reset also drops its handlers — this guards the seq path too).
+  state.query_seq = (state.query_seq or 0) + 1
+  clear_input()
   redraw()
   backend.reset() -- drop pending results + reset the AI Mode conversation
-end
-
-local function clear_input()
-  if buf_valid(state.input_buf) then
-    vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { '' })
-  end
 end
 
 -- The text of the most recent user question, or nil if there is none yet.
@@ -132,7 +131,7 @@ end
 -- Timings (exposed so tests can shorten them). pong_ms must clear the backend's only
 -- synchronous work (parsing a large answer) so we never false-fire on a busy backend.
 M._watchdog = { interval_ms = 20000, pong_ms = 8000 }
-local function start_watchdog(seq)
+local function start_watchdog(seq, id)
   local function current() return state.awaiting and state.query_seq == seq end
   local function tick()
     if not current() then return end -- answered, superseded, or panel closed
@@ -144,6 +143,9 @@ local function start_watchdog(seq)
         vim.defer_fn(tick, M._watchdog.interval_ms) -- alive → keep waiting, re-check later
       else
         state.awaiting = false
+        -- Retire the wedged query's handlers so a much-later reply from it can't land
+        -- in whatever turn happens to be last by then.
+        backend.cancel(id)
         set_last_ai('⚠ backend stopped responding — try /retry, or :Ham close and reopen.')
       end
     end, M._watchdog.pong_ms)
@@ -157,22 +159,27 @@ local function send_query(text)
   table.insert(state.messages, { role = 'ai', text = '' })
   state.awaiting = true
   state.query_seq = (state.query_seq or 0) + 1
+  local seq = state.query_seq
   redraw()
   scroll_new_turn_to_top() -- put the new question at the top; answer fills below
 
-  backend.query(text, {
-    on_chunk = function(t) set_last_ai(t) end,
+  -- Guard every handler by `seq`: if this query has been superseded (a new submit, a
+  -- /clear, or a watchdog give-up) its late reply must not write into a later turn.
+  local id = backend.query(text, {
+    on_chunk = function(t) if state.query_seq == seq then set_last_ai(t) end end,
     on_done = function(t)
+      if state.query_seq ~= seq then return end
       set_last_ai(t)
       state.awaiting = false
     end,
     on_error = function(msg)
+      if state.query_seq ~= seq then return end
       set_last_ai('⚠ ' .. msg)
       state.awaiting = false
     end,
   })
 
-  start_watchdog(state.query_seq)
+  start_watchdog(seq, id)
 end
 
 -- Re-ask the last question (also the /retry command and :Ham retry).
@@ -299,11 +306,11 @@ function M.open()
   vim.bo[state.input_buf].filetype = 'ham-input'
   vim.bo[state.conv_buf].modifiable = false
 
-  -- Compute the chat panel width: width_pct of the screen (default 30%), unless a
+  -- Compute the chat panel width: width_pct of the screen (default 45%), unless a
   -- fixed `width` override is given.
   local width = opts.split.width
   if not width then
-    width = math.floor(vim.o.columns * (opts.split.width_pct or 30) / 100)
+    width = math.floor(vim.o.columns * (opts.split.width_pct or 45) / 100)
   end
   width = math.max(20, width)
 
@@ -325,6 +332,23 @@ function M.open()
   set_keymaps()
   open_generation = open_generation + 1
   local gen = open_generation
+
+  -- Full teardown on ANY panel close, not just `q` / `:Ham close`. If the user closes a
+  -- panel window by other means (`:q`, <C-w>c, closing the tab), route it through
+  -- M.close so the backend + headless Firefox don't orphan and the scratch buffers
+  -- don't leak. Generation-scoped group so a stale autocmd can't fire on a later panel.
+  state.augroup = vim.api.nvim_create_augroup('ham_panel_' .. gen, { clear = true })
+  vim.api.nvim_create_autocmd('WinClosed', {
+    group = state.augroup,
+    callback = function(ev)
+      if open_generation ~= gen then return true end -- superseded panel → drop this autocmd
+      local closed = tonumber(ev.match)
+      if closed == state.conv_win or closed == state.input_win then
+        vim.schedule(M.close)
+      end
+    end,
+  })
+
   state.starting = true
   redraw()
 
@@ -351,6 +375,9 @@ function M.open()
 end
 
 function M.close()
+  -- Drop the WinClosed watcher FIRST so closing the panel windows below doesn't
+  -- re-enter M.close through it.
+  if state.augroup then pcall(vim.api.nvim_del_augroup_by_id, state.augroup); state.augroup = nil end
   if win_valid(state.input_win) then pcall(vim.api.nvim_win_close, state.input_win, true) end
   if win_valid(state.conv_win) then pcall(vim.api.nvim_win_close, state.conv_win, true) end
   -- Wipe the scratch buffers (bufhidden='hide' would otherwise leave them lingering

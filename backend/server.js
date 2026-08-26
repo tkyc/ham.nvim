@@ -12,9 +12,10 @@
 //        {"type":"error","id":<n|null>,"message":"...","code":"..."}
 //        {"type":"pong"}
 //
-// The browser connection and AI Mode page are created lazily on the first query
-// and kept alive for the whole process (== the whole nvim session), so follow-up
-// questions keep their conversation context.
+// In browser mode the browser connection and AI Mode page are created lazily on the
+// first query and kept alive for the whole process (== the whole nvim session), so
+// follow-up questions keep their conversation context. In http mode no page is created
+// for queries at all — Firefox is attached only transiently to harvest cookies.
 
 const readline = require('readline');
 const net = require('node:net');
@@ -64,7 +65,7 @@ async function ensureConnected() {
     browser = b;
   }
   if (!page || page.isClosed()) {
-    page = await browserlib.ensurePage(browser, config);
+    page = await browserlib.ensurePage(browser);
   }
 }
 
@@ -99,13 +100,27 @@ function portOpen(host, port, timeoutMs = 300) {
 // a fresh headless launch only has the persistent ones, and without NID Google serves
 // a token-less shell page that makes the folwr request 400.
 async function harvestViaBrowser() {
-  await ensureConnected();
+  // Harvest on a THROWAWAY tab so we never disturb the tab the user is driving (e.g. the
+  // captcha solver): navigating the session `page` to google.com would clobber it mid-
+  // solve. Reuse an existing BiDi connection if one is live (Firefox allows only one
+  // session, so a fresh connect() could collide with the captcha-clear watcher's) and
+  // only disconnect a connection we opened ourselves. http mode never drives the page,
+  // so newPage() here is safe (no visibility-spoof preload to hang it).
+  const owned = !browser;
+  const b = browser || await browserlib.connect(config);
+  let harvestPage = null;
   try {
-    await page.goto('https://www.google.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-  } catch (_) { /* best-effort; harvest whatever is there */ }
-  const cookies = await page.cookies('https://www.google.com');
-  const ua = await page.evaluate(() => navigator.userAgent);
-  return { cookies, ua };
+    harvestPage = await b.newPage();
+    try {
+      await harvestPage.goto('https://www.google.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+    } catch (_) { /* best-effort; harvest whatever is there */ }
+    const cookies = await harvestPage.cookies('https://www.google.com');
+    const ua = await harvestPage.evaluate(() => navigator.userAgent);
+    return { cookies, ua };
+  } finally {
+    try { if (harvestPage) await harvestPage.close(); } catch (_) { /* ignore */ }
+    if (owned) { try { await b.disconnect(); } catch (_) { /* ignore */ } }
+  }
 }
 
 // Get the profile's Google cookies + UA. Prefer a live Firefox if one is on the debug
@@ -151,16 +166,19 @@ async function handleQuery(job) {
       }
       return;
     } catch (err) {
-      // A captcha (ECAPTCHA) or a Firefox restart under us means the cookie jar the
-      // HTTP conversation holds is stale — re-harvest it on the next attempt/re-send.
-      if (isHttpMode() && (err.code === 'ECAPTCHA' || isConnDropped(err))) cookieStale = true;
-      // Firefox was likely restarted under us (captcha/headless flip). Drop the
-      // stale handles and retry connecting to the fresh instance for a while
-      // before giving up, so the post-captcha re-send actually runs instead of
-      // dying on a "Connection closed".
+      // Only a real bot-check (ECAPTCHA) means the HTTP conversation's cookie jar is
+      // stale and worth re-harvesting. A plain dropped socket (a transient network blip
+      // against google.com) does NOT imply stale cookies, so don't force a re-harvest.
+      if (isHttpMode() && err.code === 'ECAPTCHA') cookieStale = true;
+      // A connection drop is usually Firefox restarted under us (browser mode's
+      // captcha/headless flip). Retry connecting to the fresh instance for a while so
+      // the post-captcha re-send runs instead of dying on a "Connection closed". Only
+      // browser mode holds a session browser/page to drop; in http mode they're unused.
       if (isConnDropped(err) && attempt <= 8 && Date.now() < deadline) {
-        browser = null;
-        page = null;
+        if (!isHttpMode()) {
+          browser = null;
+          page = null;
+        }
         await new Promise((r) => setTimeout(r, Math.min(500 * attempt, 2500)));
         continue;
       }
@@ -172,15 +190,27 @@ async function handleQuery(job) {
 async function pump() {
   if (working) return;
   working = true;
-  while (queue.length) {
-    const job = queue.shift();
-    try {
-      await handleQuery(job);
-    } catch (err) {
-      fail(job.id, err);
+  // finally guarantees the flag is cleared even if a job's own plumbing throws (e.g. a
+  // stdout EPIPE from fail() when nvim's pipe closes) — otherwise `working` would stay
+  // true and every future pump() would return early, wedging the backend silently.
+  try {
+    while (queue.length) {
+      const job = queue.shift();
+      if (job.kind === 'reset') {
+        // Serialized with queries so a reset can't navigate/clear state out from under
+        // an in-flight answer (which would destroy it mid-stream).
+        try { await resetConversation(); } catch (_) { /* best-effort */ }
+        continue;
+      }
+      try {
+        await handleQuery(job);
+      } catch (err) {
+        fail(job.id, err);
+      }
     }
+  } finally {
+    working = false;
   }
-  working = false;
 }
 
 // Wait for a captcha the user is solving (in the now-headful window) to clear, then
@@ -207,6 +237,7 @@ async function awaitCaptchaCleared(id) {
 async function resetConversation() {
   if (isHttpMode()) {
     conversation = null; // next query starts a fresh first turn (new thread)
+    cookieStale = false; // the fresh Conversation harvests cookies itself; don't double-harvest
     return;
   }
   try {
@@ -235,11 +266,12 @@ function handleLine(line) {
       send({ type: 'pong' });
       break;
     case 'query':
-      queue.push({ id: msg.id, text: String(msg.text || '') });
+      queue.push({ kind: 'query', id: msg.id, text: String(msg.text || '') });
       pump();
       break;
     case 'reset':
-      resetConversation();
+      queue.push({ kind: 'reset' });
+      pump();
       break;
     case 'await_captcha_clear':
       awaitCaptchaCleared(msg.id);
@@ -269,7 +301,15 @@ process.on('SIGTERM', () => shutdown(0));
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGHUP', () => shutdown(0));
 
-process.on('uncaughtException', (err) => fail(null, err));
-process.on('unhandledRejection', (err) => fail(null, err instanceof Error ? err : new Error(String(err))));
+// After an uncaughtException Node's state is officially undefined — continuing could
+// leave working/queue/browser inconsistent (a wedged backend that still answers pings).
+// Report it, then exit cleanly (ending the BiDi session) so nvim restarts us fresh.
+process.on('uncaughtException', (err) => {
+  try { fail(null, err); } catch (_) { /* stdout may be gone */ }
+  shutdown(1);
+});
+process.on('unhandledRejection', (err) => {
+  try { fail(null, err instanceof Error ? err : new Error(String(err))); } catch (_) { /* ignore */ }
+});
 
 send({ type: 'ready' });

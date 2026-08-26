@@ -18,11 +18,18 @@ const VOID = new Set(['AREA', 'BASE', 'BR', 'COL', 'EMBED', 'HR', 'IMG', 'INPUT'
   'LINK', 'META', 'PARAM', 'SOURCE', 'TRACK', 'WBR']);
 
 function decodeEntities(s) {
+  // Clamp out-of-range code points instead of passing them to String.fromCodePoint,
+  // which throws RangeError for anything > 0x10FFFF (e.g. a degenerate &#9999999999;)
+  // and would otherwise crash the whole render.
+  const cp = (n) => (Number.isFinite(n) && n >= 0 && n <= 0x10FFFF ? String.fromCodePoint(n) : '�');
   return (s || '')
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ')
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n));
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => cp(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, n) => cp(parseInt(n, 10)))
+    // &amp; LAST, so an already-escaped entity like &amp;lt; decodes to the literal
+    // text "&lt;" rather than doubly to "<".
+    .replace(/&amp;/g, '&');
 }
 
 // Index of the '>' that ends the tag starting at `lt`, skipping quoted attr values.
@@ -149,7 +156,7 @@ function isHidden(node) {
 
 function isCitation(node) {
   const a = node.attrs || {};
-  if (a['aria-hidden'] === 'true') return true;
+  // (aria-hidden is handled by isHidden, which walk() checks alongside isCitation.)
   if (SOURCE.test(textOf(node).trim())) return true;
   // Citation source CARDS are block-level chips with data-src-id; drop those but keep
   // inline entity chips. Off-DOM we approximate "block" by tag.

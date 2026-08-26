@@ -61,7 +61,7 @@ async function main() {
   try {
     if (!(await waitForPort(PORT, 20000))) throw new Error(`Firefox debug port ${PORT} never came up`);
     browser = await browserlib.connect({ port: PORT });
-    const page = await browserlib.ensurePage(browser, { port: PORT });
+    const page = await browserlib.ensurePage(browser);
 
     // A page with a visibilitychange listener that records if it fired.
     const html = '<script>window.vcFired=false;'

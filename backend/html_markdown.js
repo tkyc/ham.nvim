@@ -239,10 +239,13 @@ function walk(node, buf) {
   if ((heading || block) && added !== '') buf.push('\n');
 }
 
-function toMarkdown(root) {
-  const buf = [];
-  walk(root, buf);
-  const rawLines = buf.join('').split('\n');
+// Post-process a raw walk buffer — the concatenated push()es joined and split on '\n' —
+// into finished Markdown: fold a bare language label into the following fence, keep code
+// verbatim, drop empty emphasis / source / boilerplate lines, and collapse blank runs.
+// This is the single source of truth for that pass: browser.js's in-page DOM walk returns
+// its raw buffer and calls this too, so both query modes render identically.
+function finishMarkdown(rawText) {
+  const rawLines = String(rawText || '').split('\n');
   const out = [];
   let inCode = false;
   let prevBlank = false;
@@ -283,8 +286,14 @@ function toMarkdown(root) {
   return out.join('\n').replace(/\n{4,}/g, '\n\n\n').trim();
 }
 
+function toMarkdown(root) {
+  const buf = [];
+  walk(root, buf);
+  return finishMarkdown(buf.join(''));
+}
+
 function render(node) {
   return toMarkdown(node);
 }
 
-module.exports = { parse, render, find, decodeEntities };
+module.exports = { parse, render, find, decodeEntities, finishMarkdown };

@@ -308,8 +308,13 @@ process.on('uncaughtException', (err) => {
   try { fail(null, err); } catch (_) { /* stdout may be gone */ }
   shutdown(1);
 });
+// Like uncaughtException: an unhandled rejection means some async path threw past its
+// awaits, leaving working/queue/browser/conversation in an undefined state. Report it,
+// then exit cleanly (ending the BiDi session) so nvim restarts us fresh rather than
+// letting a half-broken backend keep answering pings.
 process.on('unhandledRejection', (err) => {
-  try { fail(null, err instanceof Error ? err : new Error(String(err))); } catch (_) { /* ignore */ }
+  try { fail(null, err instanceof Error ? err : new Error(String(err))); } catch (_) { /* stdout may be gone */ }
+  shutdown(1);
 });
 
 send({ type: 'ready' });

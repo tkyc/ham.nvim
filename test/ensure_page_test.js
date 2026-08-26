@@ -71,7 +71,7 @@ async function main() {
 
     // Case 1: no AI Mode tab present -> ensurePage opens a NEW tab.
     let before = (await browser.pages()).length;
-    let p = await browserlib.ensurePage(browser, { port: PORT });
+    let p = await browserlib.ensurePage(browser);
     let after = (await browser.pages()).length;
     check('no AI Mode tab -> creates a new tab', after === before + 1);
 
@@ -79,7 +79,7 @@ async function main() {
     const aim = await browser.newPage();
     await aim.goto('data:text/html,<div data-subtree="aimc">answer</div>', { waitUntil: 'domcontentloaded' });
     before = (await browser.pages()).length;
-    p = await browserlib.ensurePage(browser, { port: PORT });
+    p = await browserlib.ensurePage(browser);
     after = (await browser.pages()).length;
     const reusedIsAiMode = await p.evaluate(() => !!document.querySelector('[data-subtree="aimc"]'));
     check('existing AI Mode tab -> reuses it (no new tab)', after === before);

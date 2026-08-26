@@ -22,7 +22,7 @@ closed for you — ham only *attaches* to a Firefox you started.
 
 ```lua
 {
-  dir = '/home/tkyc/repo/ham', -- or a git URL once you publish it
+  dir = '/path/to/ham', -- local checkout, or a git URL once you publish it
   build = 'cd backend && npm install',
   opts = {}, -- calls require('ham').setup({})
   cmd = 'Ham',
@@ -35,7 +35,7 @@ Without a plugin manager, add the repo to your `runtimepath` and run
 **2. Install the backend dependency:**
 
 ```sh
-cd /home/tkyc/repo/ham/backend
+cd /path/to/ham/backend
 npm install        # pulls puppeteer-core (does NOT download Chromium)
 ```
 
@@ -109,7 +109,7 @@ require('ham').setup({
   node_cmd = 'node',
   split = {
     side = 'right',      -- 'right' | 'left'
-    width_pct = 30,      -- chat panel = 30% of screen (editor keeps 70%)
+    width_pct = 45,      -- chat panel = 45% of screen (editor keeps 55%)
     width = nil,         -- optional fixed columns; overrides width_pct when set
     input_height = 6,
   },
@@ -119,11 +119,19 @@ require('ham').setup({
     focus_input = 'i',
     quit = 'q',
   },
+  -- Slash commands typed in the input box (mirror the :Ham subcommands). Set any to
+  -- false/'' to disable that slash command.
+  clear_command = '/clear',
+  retry_command = '/retry',
+  explain_command = '/explain',
+  explain_prompt = 'Explain in plain English. Annotate in a code block with a comment above per line:',
   firefox = {
     manage = true,          -- let ham launch/restart Firefox
     headless = true,        -- no window (avoids the Wayland occlusion freeze)
     profile = vim.fn.stdpath('data') .. '/ham/firefox', -- dedicated profile; '' ⇒ default
     auto_restart = true,    -- (default-profile fallback only) restart a running Firefox
+    close_on_stop = true,   -- quit ham's Firefox on panel close / nvim exit; false keeps
+                            -- the headless instance warm so reopening is instant
     cmd = 'firefox',
     extra_args = {},
     launch_timeout_ms = 20000,

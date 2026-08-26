@@ -21,7 +21,7 @@ async function main() {
   process.stderr.write(`[ham-test] connecting to Firefox...\n`);
   const browser = await browserlib.connect(config);
   try {
-    const page = await browserlib.ensurePage(browser, config);
+    const page = await browserlib.ensurePage(browser);
     process.stderr.write(`[ham-test] asking: ${question}\n`);
     let lastLen = 0;
     const answer = await browserlib.ask(browser, page, question, config, (partial) => {

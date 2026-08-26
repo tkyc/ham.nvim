@@ -15,9 +15,11 @@
 // stops returning text, re-capture with the scripts in test/ and update the maps.
 
 const BASE = 'https://www.google.com';
-const FF_UA = 'Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0';
 
 const htmlmd = require('./html_markdown');
+// The generic Firefox UA lives in profile_cookies (the module that owns UA derivation);
+// reuse it here as the fallback so the string is defined in exactly one place.
+const FF_UA = require('./profile_cookies').DEFAULT_UA;
 
 // ---- token extraction -------------------------------------------------------
 
@@ -137,6 +139,10 @@ function extractAnswer(html) {
 }
 
 // ---- HTTP -------------------------------------------------------------------
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 function cookieHeader(cookies) {
   if (typeof cookies === 'string') return cookies;
@@ -293,11 +299,14 @@ class Conversation {
       this.tokens = null;
       return this._firstTurn(query);
     }
-    let ans = await httpGet(buildFolif(this.tokens, query), this.ctx);
-    if (!isAnswerable(ans.body)) {
-      // Retry folif once: a transient shell (the answer just wasn't ready) shouldn't
-      // cost the whole conversation. Keep the tokens for this second attempt.
+    // Try folif up to twice: a transient shell (the answer just wasn't ready) shouldn't
+    // cost the whole conversation. Keep the tokens across attempts and give the second a
+    // brief beat to let the answer materialize.
+    let ans = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
       ans = await httpGet(buildFolif(this.tokens, query), this.ctx);
+      if (isAnswerable(ans.body)) break;
+      if (attempt < 2) await sleep(400);
     }
     if (!isAnswerable(ans.body)) {
       // Still nothing — the follow-up token chain (srtst/mstk…) likely expired. Drop it

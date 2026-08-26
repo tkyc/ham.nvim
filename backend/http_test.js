@@ -26,7 +26,7 @@ async function main() {
   let cookies = [];
   let ua;
   try {
-    const page = await browserlib.ensurePage(browser, {});
+    const page = await browserlib.ensurePage(browser);
     cookies = await page.cookies('https://www.google.com');
     ua = await page.evaluate(() => navigator.userAgent);
   } finally {

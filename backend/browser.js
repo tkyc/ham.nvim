@@ -14,6 +14,7 @@
 // selectors here (or via config) using test.js as the canary.
 
 const puppeteer = require('puppeteer-core');
+const htmlmd = require('./html_markdown');
 
 const DEFAULTS = {
   host: '127.0.0.1',
@@ -291,9 +292,11 @@ async function fillComposer(page, el, text) {
 // follow-up reads only its own new answer, never falling back to a container that
 // still holds the previous turn. We walk the DOM instead of taking innerText so we
 // can keep structure (headings, bold/italic, lists, links, fenced code, tables)
-// and drop AI Mode's citation chips/cards.
+// and drop AI Mode's citation chips/cards. The in-page walk returns each container's
+// raw buffer; the shared htmlmd.finishMarkdown pass (identical to http mode's) turns
+// it into finished Markdown here in Node, so both query modes render the same way.
 async function readAnswer(page, selectors, index) {
-  return page.evaluate((args) => {
+  const parts = await page.evaluate((args) => {
     const sels = args[0];
     const idx = args[1];
     const SKIP = new Set(['BUTTON', 'SVG', 'PATH', 'IMG', 'STYLE', 'SCRIPT', 'NOSCRIPT', 'INPUT', 'TEXTAREA']);
@@ -400,80 +403,29 @@ async function readAnswer(page, selectors, index) {
       if ((heading || block) && added !== '') buf.push('\n');
     }
 
-    const LANGS = new Set(['python', 'py', 'javascript', 'js', 'typescript', 'ts', 'java', 'c',
-      'cpp', 'c++', 'csharp', 'cs', 'go', 'golang', 'rust', 'rs', 'ruby', 'rb', 'php', 'bash',
-      'shell', 'sh', 'zsh', 'sql', 'html', 'css', 'scss', 'json', 'yaml', 'yml', 'xml', 'kotlin',
-      'swift', 'r', 'perl', 'lua', 'dart', 'scala', 'haskell', 'toml', 'dockerfile', 'makefile', 'text']);
-    const BOILERPLATE = /^(use code with caution\.?|expand_more|content_copy|thumb_up|thumb_down|show all|show more|show less|feedback|sources|opens in new tab)$/i;
-
-    function toMarkdown(root) {
-      const buf = [];
-      walk(root, buf);
-      const rawLines = buf.join('').split('\n');
-      const out = [];
-      let inCode = false;
-      let prevBlank = false;
-      for (let line of rawLines) {
-        if (line.trim() === '```') {
-          if (!inCode) {
-            // Opening fence: if the previous line was a bare language label, turn
-            // it into the fence's language and drop the stray label line.
-            let li = out.length - 1;
-            while (li >= 0 && out[li] === '') li--;
-            if (li >= 0 && LANGS.has(out[li].toLowerCase())) {
-              const lang = out.splice(li, out.length - li)[0];
-              out.push('```' + lang.toLowerCase());
-            } else {
-              out.push('```');
-            }
-          } else {
-            out.push('```');
-          }
-          inCode = !inCode;
-          prevBlank = false;
-          continue;
-        }
-        if (inCode) { out.push(line); prevBlank = false; continue; } // verbatim code
-        let l;
-        if (line.charAt(0) === '|') {
-          l = line.replace(/[ \t]+$/, ''); // markdown table row: keep pipes/spacing
-        } else {
-          l = line.replace(/[ \t]+/g, ' ').trim();
-        }
-        // Drop empty emphasis left behind when a wrapped element had no text
-        // (e.g. a bold team name whose only child was a stripped link, or a
-        // formula rendered as an image): **** / ** ** / * *.
-        l = l.replace(/\*\*([^*]*)\*\*/g, function (m, inner) { return inner.trim() ? m : ''; });
-        l = l.replace(/\*([^*]*)\*/g, function (m, inner) { return inner.trim() ? m : ''; });
-        l = l.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/, '');
-        if (SOURCE.test(l) || BOILERPLATE.test(l)) continue;  // drop source/UI boilerplate
-        if (l.trim() === '-' || l.trim() === '###') continue; // drop empty bullets/headings
-        if (l === '' && prevBlank) continue;                  // collapse blank runs
-        out.push(l);
-        prevBlank = (l === '');
-      }
-      return out.join('\n').replace(/\n{4,}/g, '\n\n\n').trim();
-    }
-
     // Read the current turn's answer from the first selector that reaches `idx`. Turns
     // are serialized, so every container from `idx` onward belongs to THIS turn — read
     // all of them (not just nodes[idx]), so an answer that renders as more than one
     // container isn't silently truncated to its first block. In the common one-container-
-    // per-turn case this is exactly nodes[idx]. If idx isn't there yet, return '' (keep
-    // waiting) rather than falling back to an earlier turn.
+    // per-turn case this is exactly nodes[idx]. If idx isn't there yet, return [] (keep
+    // waiting) rather than falling back to an earlier turn. Each container is returned as
+    // its raw walk buffer; Node finishes them with the shared finishMarkdown pass.
     for (const sel of sels) {
       const nodes = document.querySelectorAll(sel);
       if (nodes.length > idx) {
-        const parts = [];
+        const raws = [];
         for (let k = idx; k < nodes.length; k++) {
-          const md = toMarkdown(nodes[k]);
-          if (md) parts.push(md);
+          const buf = [];
+          walk(nodes[k], buf);
+          raws.push(buf.join(''));
         }
-        return parts.join('\n\n');
+        return raws;
       }
     }
-    return '';
+    return [];
   }, [selectors, index || 0]);
+
+  return parts.map((raw) => htmlmd.finishMarkdown(raw)).filter(Boolean).join('\n\n');
 }
 
 // How many answer containers exist (using the first selector that matches any).

@@ -111,12 +111,15 @@ local function dispatch(msg)
     if h and h.on_error then
       h.on_error(msg.message or 'unknown error', msg.code)
       pending[msg.id] = nil
-    else
+    elseif msg.id == nil then
       -- Untargeted error (no id) — surface globally.
       vim.schedule(function()
         vim.notify('[ham] backend error: ' .. (msg.message or '?'), vim.log.levels.ERROR)
       end)
     end
+    -- else: a targeted error whose handler was already retired (watchdog gave up, or the
+    -- query was superseded/cleared). The user has already seen that turn resolve — drop it
+    -- silently rather than popping a stray global "backend error".
   end
 end
 
@@ -169,9 +172,9 @@ local function on_exit(id, code)
   stopping = false
   stdout_buf = ''
   -- Fail any in-flight requests.
-  for id, h in pairs(pending) do
+  for pid, h in pairs(pending) do
     if h.on_error then h.on_error('backend process exited') end
-    pending[id] = nil
+    pending[pid] = nil
   end
 end
 

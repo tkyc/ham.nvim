@@ -62,7 +62,7 @@ async function main() {
   try {
     if (!(await waitForPort(PORT, 20000))) throw new Error(`Firefox debug port ${PORT} never came up`);
     browser = await browserlib.connect({ port: PORT });
-    const page = await browserlib.ensurePage(browser, { port: PORT });
+    const page = await browserlib.ensurePage(browser);
 
     // Fake composer that submits on Enter (no Shift) — like AI Mode's.
     const html = '<textarea id="c"></textarea><script>'

@@ -14,6 +14,9 @@ local state = {
   input_win = nil,
   messages = {}, -- { { role = 'you'|'ai'|'system', text = string }, ... }
   awaiting = false, -- a query is in flight
+  starting = false, -- true while Firefox + backend are coming up (shows the spinner)
+  query_seq = 0, -- bumped per submit/clear; guards late replies from superseded turns
+  augroup = nil, -- generation-scoped WinClosed autocmd group for the current panel
 }
 
 -- Bumped on every open(); lets a deferred timer tell whether it belongs to the

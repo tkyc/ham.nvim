@@ -131,7 +131,7 @@ require('ham').setup({
   backend = {
     host = '127.0.0.1',
     port = 9222,
-    mode = 'browser',        -- 'browser' | 'http'  (see "Query modes" below)
+    mode = 'http',           -- 'http' | 'browser'  (see "Query modes" below)
     -- Advanced (see backend/browser.js DEFAULTS): ai_mode_url,
     -- followup_selectors, response_selectors, and timing knobs. Override these
     -- when Google changes AI Mode's markup.
@@ -143,18 +143,18 @@ require('ham').setup({
 
 `backend.mode` chooses how ham fetches answers:
 
-- **`'browser'`** (default) — drives the AI Mode page in headless Firefox. Proven,
-  streams the answer in as it's generated, and renders it as clean markdown.
-- **`'http'`** — a browserless client that talks to AI Mode's async endpoints over
-  plain HTTP (no DOM driving). Faster per query and independent of AI Mode's HTML
-  markup, so it keeps working when Google reshuffles selectors — handy on a bare TTY.
-  The answer arrives in one shot (no incremental streaming). On the dedicated profile it
-  reads your Google cookies straight from `<profile>/cookies.sqlite`, so **no Firefox
-  runs to answer queries at all**. Firefox is still launched only for **`:Ham login`**
-  (to create/refresh the cookie DB) and to **solve a captcha** when the bot-check
-  exemption expires. Requires Node with `node:sqlite` (Node 22+); on the shared default
-  profile (`firefox.profile = ''`) it falls back to harvesting cookies from a running
-  Firefox.
+- **`'http'`** (default) — a browserless client that talks to AI Mode's async
+  endpoints over plain HTTP (no DOM driving). Faster per query and independent of AI
+  Mode's HTML markup, so it keeps working when Google reshuffles selectors — handy on
+  a bare TTY. The answer arrives in one shot (no incremental streaming). On the
+  dedicated profile it reads your Google cookies straight from
+  `<profile>/cookies.sqlite`, so **no Firefox runs to answer queries at all**. Firefox
+  is still launched only for **`:Ham login`** (to create/refresh the cookie DB) and to
+  **solve a captcha** when the bot-check exemption expires. Requires Node with
+  `node:sqlite` (Node 22+); on the shared default profile (`firefox.profile = ''`) it
+  falls back to harvesting cookies from a running Firefox.
+- **`'browser'`** — drives the AI Mode page in headless Firefox. Proven, streams the
+  answer in as it's generated, and renders it as clean markdown.
 
 Both modes need the same logged-in Firefox profile. `:checkhealth ham` shows the active
 mode and (in http mode) whether the cookie DB is present. If you haven't logged in yet,

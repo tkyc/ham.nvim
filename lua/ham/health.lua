@@ -17,7 +17,7 @@ function M.check()
   h_start('ham')
 
   -- query mode
-  local mode = opts.backend.mode or 'browser'
+  local mode = opts.backend.mode or 'http'
   if mode == 'http' then
     h_ok('query mode: http (browserless token-chaining fetcher; Firefox only for login + captcha)')
     -- Cookie source: on a dedicated profile, queries read cookies straight from disk.

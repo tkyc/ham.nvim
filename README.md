@@ -1,5 +1,7 @@
 # Headless AI Mode - Ham 
 
+[![CI](https://github.com/tkyc/ham.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/tkyc/ham.nvim/actions/workflows/ci.yml)
+
 Use Google's **AI Mode** from inside Neovim. Run `:Ham` and the screen splits —
 your file editor on the left, a chat panel on the right. Ask questions, get
 answers, keep asking follow-ups; the conversation lives for the whole nvim session.

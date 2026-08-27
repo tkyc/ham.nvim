@@ -101,6 +101,9 @@ function aimcRegion(html) {
   const idx = html.indexOf('data-subtree="aimc"');
   if (idx === -1) return html;
   const gt = html.indexOf('>', idx); // skip past the container's opening tag
+  // 400k-char cap: generous for any real answer, but bounds the slice so a
+  // pathological page can't blow up the parser. A longer answer truncates here
+  // (accepted trade-off — real AI Mode answers are far shorter).
   return html.slice(gt + 1, gt + 1 + 400000);
 }
 

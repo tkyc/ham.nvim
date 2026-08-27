@@ -75,8 +75,7 @@ function M.check()
   if firefox.is_up_sync(host, port, 800) then
     h_ok(('Firefox debug port reachable at %s:%d'):format(host, port))
   elseif opts.firefox.manage then
-    local http_disk = (opts.backend.mode == 'http') and opts.firefox.profile and opts.firefox.profile ~= ''
-    if http_disk then
+    if config.uses_disk_cookies() then
       h_ok(('debug port %s:%d is down — expected in http mode; Firefox launches only for :Ham login and captchas'):format(host, port))
     else
       h_ok(('debug port %s:%d is down — ham will %s Firefox on :Ham'):format(

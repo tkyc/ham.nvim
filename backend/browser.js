@@ -62,8 +62,7 @@ const DEFAULTS = {
   // signal, finish anyway (guards against the signal changing/breaking).
   stall_polls: 38,
   // Keep the driven tab running full-speed while Firefox is backgrounded, so AI
-  // Mode doesn't stall streaming at "…" until the window is focused. (Alias:
-  // spoof_visibility, kept for back-compat.)
+  // Mode doesn't stall streaming at "…" until the window is focused.
   keep_awake: true,
 };
 
@@ -535,8 +534,7 @@ async function ask(browser, page, text, config, onChunk) {
   // as a PRELOAD (so the next navigation's document is patched before AI Mode's
   // scripts run — critical for a first-turn query in the URL) and apply it to the
   // current document (for follow-ups on the already-loaded page).
-  // (spoof_visibility is the old flag name, still honoured.)
-  const keepAwake = cfg.keep_awake !== false && cfg.spoof_visibility !== false;
+  const keepAwake = cfg.keep_awake !== false;
   if (keepAwake) {
     await registerVisibilitySpoof(page);
     await installVisibilitySpoof(page);

@@ -3,13 +3,16 @@
 // Long-lived backend for the ham Neovim plugin.
 //
 // Speaks newline-delimited JSON over stdio:
-//   IN : {"type":"config","config":{...}}        (optional, send once first)
+//   IN : {"type":"config","config":{...}}          (optional, send once first)
 //        {"type":"query","id":<n>,"text":"..."}
+//        {"type":"reset"}                            (start a fresh conversation)
+//        {"type":"await_captcha_clear","id":<n>}     (wait for the user to solve a captcha)
 //        {"type":"ping"}
 //   OUT: {"type":"ready"}
 //        {"type":"chunk","id":<n>,"text":"...partial..."}
 //        {"type":"done","id":<n>,"text":"...final..."}
 //        {"type":"error","id":<n|null>,"message":"...","code":"..."}
+//        {"type":"captcha_cleared","id":<n>}         (user solved it; re-send the query)
 //        {"type":"pong"}
 //
 // In browser mode the browser connection and AI Mode page are created lazily on the
@@ -156,6 +159,13 @@ async function handleQuery(job) {
       if (isHttpMode()) {
         await ensureConversation();
         const { answer } = await conversation.ask(job.text);
+        // A response can be "answerable" (has the aimc container) yet render to nothing
+        // if the answer markup drifted. Browser mode throws in that case; match it here
+        // so ham surfaces a clear error instead of a silent, permanently-blank turn.
+        if (!answer || !answer.trim()) {
+          throw new Error('No answer text found in the AI Mode response — the markup may '
+            + 'have changed (see backend/http_fetcher.js extractAnswer).');
+        }
         send({ type: 'done', id: job.id, text: answer }); // one-shot; no streaming
       } else {
         await ensureConnected();

@@ -138,6 +138,14 @@ local function start_watchdog(seq, id)
   local function current() return state.awaiting and state.query_seq == seq end
   local function tick()
     if not current() then return end -- answered, superseded, or panel closed
+    -- Backend not up yet (the query is still queued behind a slow Firefox/backend
+    -- startup): with no job, ping() is a silent no-op that must NOT read as a wedge.
+    -- Keep waiting — a genuine startup failure or crash clears `awaiting` via
+    -- on_error/on_exit, which makes current() false and stops this loop.
+    if not backend.is_running() then
+      vim.defer_fn(tick, M._watchdog.interval_ms)
+      return
+    end
     local ponged = false
     backend.ping(function() ponged = true end)
     vim.defer_fn(function()

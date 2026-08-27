@@ -87,4 +87,14 @@ function M.setup(opts)
   return M.options
 end
 
+-- True when http mode answers queries straight from the dedicated profile's
+-- cookies.sqlite on disk — so no Firefox is needed to start the backend or run
+-- queries (Firefox is still launched for :Ham login and captcha solving). Single
+-- source of truth for this predicate, used by backend.lua and health.lua.
+function M.uses_disk_cookies()
+  local o = M.options
+  return o.backend.mode == 'http'
+    and o.firefox.profile ~= nil and o.firefox.profile ~= ''
+end
+
 return M

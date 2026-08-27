@@ -19,7 +19,7 @@
 //   Run it whenever HTTP mode stops answering or starts throwing ECAPTCHA, to tell
 //   apart the two causes:
 //     • both transports fail  → the GOOGLE_ABUSE_EXEMPTION cookie is stale
-//                               → solve one captcha (:Ham once) or :Ham login.
+//                               → solve a captcha (run a query, or :Ham login).
 //     • fetch fails, curl ok  → Node's TLS fingerprint is being flagged
 //                               → the curl-impersonate transport would help.
 //     • both succeed          → everything's fine; nothing to do.

@@ -58,10 +58,7 @@ local function dispatch(msg)
           pending[msg.id] = nil
         end
       end
-      local opts = config.options
-      local http_disk = opts.backend.mode == 'http'
-        and opts.firefox.profile ~= nil and opts.firefox.profile ~= ''
-      if http_disk then
+      if config.uses_disk_cookies() then
         -- http mode reads cookies from disk: fully CLOSE Firefox (flushing the fresh
         -- exemption to cookies.sqlite), then re-send — no headless browser needed.
         firefox.quit(function() resume(true) end)
@@ -240,9 +237,7 @@ function M.start(cb)
   -- so no Firefox is needed to start — skip launching it. (Firefox is still launched
   -- later by :Ham login and the captcha solver.) Browser mode, and http mode on the
   -- shared default profile (profile == ''), still need Firefox up first.
-  local http_diskcookies = opts.backend.mode == 'http'
-    and opts.firefox.profile ~= nil and opts.firefox.profile ~= ''
-  if http_diskcookies then
+  if config.uses_disk_cookies() then
     spawn_backend()
     return
   end

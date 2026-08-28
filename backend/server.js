@@ -6,6 +6,7 @@
 //   IN : {"type":"config","config":{...}}          (optional, send once first)
 //        {"type":"query","id":<n>,"text":"..."}
 //        {"type":"reset"}                            (start a fresh conversation)
+//        {"type":"cancel","id":<n>}                  (abort an in-flight / queued query)
 //        {"type":"await_captcha_clear","id":<n>}     (wait for the user to solve a captcha)
 //        {"type":"ping"}
 //   OUT: {"type":"ready"}
@@ -31,6 +32,9 @@ let browser = null;
 let page = null;
 const queue = [];
 let working = false;
+let currentAbort = null; // AbortController for the job the pump is currently running
+let currentJobId = null; // its id, so a 'cancel' can target the running job
+let captchaWait = null; // { id, abort } while awaiting a captcha solve (not a pump job)
 
 // HTTP mode (config.mode === 'http'): answer over plain HTTP via the token-chaining
 // fetcher instead of driving the DOM. `conversation` holds the multi-turn token
@@ -152,13 +156,13 @@ async function ensureConversation() {
   }
 }
 
-async function handleQuery(job) {
+async function handleQuery(job, signal) {
   const deadline = Date.now() + 30000;
   for (let attempt = 1; ; attempt++) {
     try {
       if (isHttpMode()) {
         await ensureConversation();
-        const { answer } = await conversation.ask(job.text);
+        const { answer } = await conversation.ask(job.text, signal);
         // A response can be "answerable" (has the aimc container) yet render to nothing
         // if the answer markup drifted. Browser mode throws in that case; match it here
         // so ham surfaces a clear error instead of a silent, permanently-blank turn.
@@ -171,11 +175,14 @@ async function handleQuery(job) {
         await ensureConnected();
         const final = await browserlib.ask(browser, page, job.text, config, (partial) => {
           send({ type: 'chunk', id: job.id, text: partial });
-        });
+        }, signal);
         send({ type: 'done', id: job.id, text: final });
       }
       return;
     } catch (err) {
+      // Cancelled by the user (:Ham cancel): stop immediately — don't retry, don't
+      // re-harvest cookies. The pump swallows it (the Lua side already detached the turn).
+      if (signal && signal.aborted) throw err;
       // Only a real bot-check (ECAPTCHA) means the HTTP conversation's cookie jar is
       // stale and worth re-harvesting. A plain dropped socket (a transient network blip
       // against google.com) does NOT imply stale cookies, so don't force a re-harvest.
@@ -212,10 +219,17 @@ async function pump() {
         try { await resetConversation(); } catch (_) { /* best-effort */ }
         continue;
       }
+      currentAbort = new AbortController();
+      currentJobId = job.id;
       try {
-        await handleQuery(job);
+        await handleQuery(job, currentAbort.signal);
       } catch (err) {
-        fail(job.id, err);
+        // A user cancel aborts the job's own plumbing; the Lua side already detached the
+        // turn, so stay silent rather than surfacing the abort as a backend error.
+        if (!currentAbort.signal.aborted) fail(job.id, err);
+      } finally {
+        currentAbort = null;
+        currentJobId = null;
       }
     }
   } finally {
@@ -223,22 +237,44 @@ async function pump() {
   }
 }
 
+// Cancel a query by id: drop it from the queue if it hasn't started, and abort it if
+// it's the one currently running (so the pump frees up and the next query starts
+// promptly instead of waiting out the abandoned one).
+function cancelJob(id) {
+  if (id == null) return;
+  for (let i = queue.length - 1; i >= 0; i--) {
+    if (queue[i].kind === 'query' && queue[i].id === id) queue.splice(i, 1);
+  }
+  if (currentJobId === id && currentAbort) currentAbort.abort();
+  // A captcha solve-wait isn't a pump job (it runs in awaitCaptchaCleared), so abort it
+  // separately — otherwise it would keep polling for the full timeout after a cancel.
+  if (captchaWait && captchaWait.id === id) captchaWait.abort.abort();
+}
+
 // Wait for a captcha the user is solving (in the now-headful window) to clear, then
 // reply so ham can flip back to headless / close Firefox and retry. The solver flip
 // restarted Firefox, so drop any stale handle and connect fresh to the solver window;
 // awaitCaptchaClear scans its tabs itself, so we don't need (and must not force) a page.
 async function awaitCaptchaCleared(id) {
+  // Register the wait so a 'cancel' (:Ham cancel while solving) can abort it. Without
+  // this it would poll for the full 180s — and killing Firefox doesn't stop it, since
+  // awaitCaptchaClear treats a dropped connection as "no captcha tab yet" and keeps going.
+  const ac = new AbortController();
+  captchaWait = { id, abort: ac };
   try {
     browser = null;
     page = null;
     const b = await browserlib.connect(config);
     b.on('disconnected', () => { if (browser === b) { browser = null; page = null; } });
     browser = b;
-    const cleared = await browserlib.awaitCaptchaClear(browser, 180000);
+    const cleared = await browserlib.awaitCaptchaClear(browser, 180000, { signal: ac.signal });
+    if (ac.signal.aborted) return; // cancelled: the Lua side restores Firefox; stay silent
     if (cleared) send({ type: 'captcha_cleared', id });
     else fail(id, new Error('captcha not cleared within the time limit'));
   } catch (err) {
-    fail(id, err);
+    if (!ac.signal.aborted) fail(id, err);
+  } finally {
+    if (captchaWait && captchaWait.id === id) captchaWait = null;
   }
 }
 
@@ -282,6 +318,9 @@ function handleLine(line) {
     case 'reset':
       queue.push({ kind: 'reset' });
       pump();
+      break;
+    case 'cancel':
+      cancelJob(msg.id);
       break;
     case 'await_captcha_clear':
       awaitCaptchaCleared(msg.id);

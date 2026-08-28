@@ -21,6 +21,21 @@ local function decode(line)
   return nil
 end
 
+-- Return Firefox to its resting state after a captcha episode that will NOT resume
+-- (the user cancelled, the solve timed out, or ham gave up): flip the visible solver
+-- window back to headless, or in http-disk mode fully quit it (queries then read cookies
+-- from disk again). Fire-and-forget. The happy path (captcha_cleared) does this itself as
+-- part of resuming, so this only covers the abandoned paths. No-op when ham doesn't
+-- manage Firefox (then no solver was ever opened).
+local function restore_firefox_after_captcha()
+  if not config.options.firefox.manage then return end
+  if config.uses_disk_cookies() then
+    firefox.quit(function() end)
+  else
+    firefox.to_headless(function() end)
+  end
+end
+
 local function dispatch(msg)
   if msg.type == 'ready' then
     ready = true
@@ -49,6 +64,7 @@ local function dispatch(msg)
     -- User solved the captcha in the visible window: get Firefox out of the way and
     -- re-send the original query.
     if h then
+      h.awaiting_captcha = false -- the resume below owns the Firefox flip from here
       vim.notify('[ham] captcha solved — resuming…', vim.log.levels.INFO)
       local function resume(ok, err)
         if ok then
@@ -74,6 +90,7 @@ local function dispatch(msg)
       h.recovered = true
       vim.notify('[ham] Firefox automation session was stuck; restarting Firefox to recover…', vim.log.levels.WARN)
       firefox.restart(function(ok, err)
+        if not pending[msg.id] then return end -- cancelled during the restart; don't re-send
         if ok then
           M._send({ type = 'query', id = msg.id, text = h.text })
         elseif h.on_error then
@@ -90,7 +107,16 @@ local function dispatch(msg)
       if h.on_chunk then h.on_chunk('⚠ Captcha — solve it in the Firefox window that opened; ham will resume automatically.') end
       vim.notify('[ham] captcha — opening Firefox to solve it…', vim.log.levels.WARN)
       firefox.open_solver(function(ok, err)
+        -- Cancelled (:Ham cancel) while the solver was still opening: bail without starting
+        -- the captcha-clear wait. The flip to headful is finished by the time this callback
+        -- runs, so flipping back to headless here is SEQUENTIAL (no concurrent flip, unlike
+        -- doing it from M.abort mid-open) — that's what keeps the solver window from lingering.
+        if not pending[msg.id] then
+          if ok then restore_firefox_after_captcha() end
+          return
+        end
         if ok then
+          h.awaiting_captcha = true -- lets :Ham cancel / a give-up restore Firefox
           M._send({ type = 'await_captcha_clear', id = msg.id })
         elseif h.on_error then
           h.on_error('could not open captcha window: ' .. (err or '?'))
@@ -106,6 +132,12 @@ local function dispatch(msg)
       end)
     end
     if h and h.on_error then
+      -- If this terminal error ends an unsolved captcha episode (the solve timed out, or
+      -- a second bot-check we won't retry), return the lingering solver window to headless.
+      if h.awaiting_captcha then
+        h.awaiting_captcha = false
+        restore_firefox_after_captcha()
+      end
       h.on_error(msg.message or 'unknown error', msg.code)
       pending[msg.id] = nil
     elseif msg.id == nil then
@@ -293,6 +325,20 @@ end
 -- render into the UI (used by the watchdog when it gives up on a wedged query).
 function M.cancel(id)
   if id ~= nil then pending[id] = nil end
+end
+
+-- User-initiated cancel (:Ham cancel / /cancel): drop the handlers locally (like
+-- cancel) AND tell the backend to abort the in-flight/queued operation so the queue
+-- frees up and the next query starts promptly. The backend message is a no-op if the
+-- backend isn't running (M._send returns false).
+function M.abort(id)
+  if id == nil then return end
+  local h = pending[id]
+  pending[id] = nil
+  M._send({ type = 'cancel', id = id }) -- stops a running query OR a captcha solve-wait
+  -- If we were mid-captcha-solve, the resume path that normally flips Firefox back won't
+  -- run (its handler is now dropped), so return the solver window to headless here.
+  if h and h.awaiting_captcha then restore_firefox_after_captcha() end
 end
 
 -- Reset the AI Mode conversation: drop any in-flight query callbacks (their

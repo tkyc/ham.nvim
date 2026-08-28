@@ -36,6 +36,9 @@ M.defaults = {
   clear_command = '/clear',
   -- Slash command that re-asks the last question. Set to false/'' to disable.
   retry_command = '/retry',
+  -- Slash command that abandons the in-flight query — frees the panel to ask again
+  -- without tearing down the backend/Firefox session. Set to false/'' to disable.
+  cancel_command = '/cancel',
   -- Slash command that asks AI Mode to explain the unnamed register (your last
   -- yank) in plain English. Set to false/'' to disable.
   explain_command = '/explain',

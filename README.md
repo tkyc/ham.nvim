@@ -63,10 +63,12 @@ Then just **`:Ham`** — type your question in the input box and press `<CR>`
 | `:Ham clear` | Wipe the transcript and start a fresh AI Mode conversation |
 | `:Ham retry` | Re-ask your last question |
 | `:Ham explain` | Ask AI Mode to explain the unnamed register (your last `y` yank) |
+| `:Ham cancel` | Abandon the in-flight query and free the panel (session stays up) |
 
-The last three also work as **slash commands** typed in the input box —
-`/clear`, `/retry`, `/explain` — configurable via `clear_command`,
-`retry_command`, `explain_command`.
+The last four also work as **slash commands** typed in the input box —
+`/clear`, `/retry`, `/explain`, `/cancel` — configurable via `clear_command`,
+`retry_command`, `explain_command`, `cancel_command`. (`/cancel` is the one that
+works *while a query is in flight* — the others wait for it to finish.)
 
 ### Keys (in the panel)
 
@@ -125,6 +127,7 @@ require('ham').setup({
   -- false/'' to disable that slash command.
   clear_command = '/clear',
   retry_command = '/retry',
+  cancel_command = '/cancel',
   explain_command = '/explain',
   explain_prompt = 'Explain in plain English. Annotate in a code block with a comment above per line:',
   firefox = {

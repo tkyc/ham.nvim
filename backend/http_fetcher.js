@@ -173,12 +173,16 @@ function ensureAnswerable(body) {
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
-async function httpGet(url, ctx) {
+async function httpGet(url, ctx, signal) {
   const timeoutMs = (ctx && ctx.timeoutMs) || DEFAULT_TIMEOUT_MS;
+  // Bound the whole request+body read by a timeout, and also honour an external
+  // cancel signal (:Ham cancel) if one was passed — whichever fires first aborts fetch.
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const abortSignal = signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal;
   try {
     const res = await fetch(url, {
       redirect: 'follow',
-      signal: AbortSignal.timeout(timeoutMs), // bound the whole request+body read
+      signal: abortSignal,
       headers: {
         'User-Agent': ctx.ua || FF_UA,
         'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
@@ -197,6 +201,9 @@ async function httpGet(url, ctx) {
     return { status: res.status, finalUrl: res.url, body };
   } catch (err) {
     if (err && err.code === 'ECAPTCHA') throw err; // our own /sorry throw — pass through
+    // External cancel: re-surface as an AbortError so the backend can tell a user
+    // cancel apart from a timeout (and stay silent instead of reporting an error).
+    if (signal && signal.aborted) { const e = new Error('cancelled'); e.name = 'AbortError'; throw e; }
     if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       throw new Error(`AI Mode request timed out after ${Math.round(timeoutMs / 1000)}s`);
     }
@@ -273,20 +280,20 @@ class Conversation {
     if (ua) this.ctx.ua = ua;
   }
 
-  async ask(query) {
-    if (!this.tokens) return this._firstTurn(query);
-    return this._followUp(query);
+  async ask(query, signal) {
+    if (!this.tokens) return this._firstTurn(query, signal);
+    return this._followUp(query, signal);
   }
 
-  async _firstTurn(query) {
-    const scaffold = await httpGet(BASE + '/search?udm=50&q=' + encodeURIComponent(query), this.ctx);
+  async _firstTurn(query, signal) {
+    const scaffold = await httpGet(BASE + '/search?udm=50&q=' + encodeURIComponent(query), this.ctx, signal);
     const tok = extractTokens(scaffold.body);
     // A scaffold with no async tokens is Google's degraded "shell" page, served when
     // the GOOGLE_ABUSE_EXEMPTION cookie is stale/expired (a 200, not a /sorry redirect,
     // so httpGet let it through). Surface it as ECAPTCHA so the backend runs the same
     // solver → cookie-refresh recovery as a hard bot-check.
     if (!tok.srtst || !tok.garc) throw captchaError('stale bot-check exemption (token-less page)');
-    const ans = await httpGet(buildFolwr(tok, query), this.ctx);
+    const ans = await httpGet(buildFolwr(tok, query), this.ctx, signal);
     ensureAnswerable(ans.body);
     // Chain: keep the scaffold's srtst/ei/stkp/elrc/xsrf (the answer response omits
     // them) and overlay whatever fresh tokens the answer DID carry — crucially mstk,
@@ -295,19 +302,19 @@ class Conversation {
     return { answer: extractAnswer(ans.body), raw: ans.body };
   }
 
-  async _followUp(query) {
+  async _followUp(query, signal) {
     // Without mstk (the thread token) folif can't carry context anyway — start a fresh
     // first turn deliberately rather than silently sending a context-free follow-up.
     if (!this.tokens.mstk) {
       this.tokens = null;
-      return this._firstTurn(query);
+      return this._firstTurn(query, signal);
     }
     // Try folif up to twice: a transient shell (the answer just wasn't ready) shouldn't
     // cost the whole conversation. Keep the tokens across attempts and give the second a
     // brief beat to let the answer materialize.
     let ans = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
-      ans = await httpGet(buildFolif(this.tokens, query), this.ctx);
+      ans = await httpGet(buildFolif(this.tokens, query), this.ctx, signal);
       if (isAnswerable(ans.body)) break;
       if (attempt < 2) await sleep(400);
     }
@@ -318,7 +325,7 @@ class Conversation {
       // _firstTurn's scaffold has no tokens → it throws ECAPTCHA and the backend opens
       // the solver — so token-expiry and captcha stay distinct.
       this.tokens = null;
-      return this._firstTurn(query);
+      return this._firstTurn(query, signal);
     }
     this.tokens = mergeTokens(this.tokens, extractTokens(ans.body));
     return { answer: extractAnswer(ans.body), raw: ans.body };

@@ -189,9 +189,14 @@ function isAiModeSearch(url) {
 // keep waiting rather than false-clear.)
 async function awaitCaptchaClear(browser, timeoutMs, opts) {
   const pollMs = (opts && opts.pollMs) || 1500;
+  const signal = opts && opts.signal;
   const deadline = Date.now() + (timeoutMs || 180000);
   let solvedStreak = 0;
   while (Date.now() < deadline) {
+    // The user cancelled the query while solving (:Ham cancel): stop polling. Returning
+    // "not cleared" is fine — the caller checks signal.aborted and stays silent, and the
+    // Lua side is already restoring Firefox to headless.
+    if (signal && signal.aborted) return false;
     let pages = [];
     try { pages = await browser.pages(); } catch (_) { pages = []; }
     let anyCaptcha = false;
@@ -252,9 +257,10 @@ async function installVisibilitySpoof(page) {
   try { await page.evaluate(KEEPALIVE_SCRIPT); } catch (_) { /* no live document yet */ }
 }
 
-async function firstMatch(page, selectors, timeout) {
+async function firstMatch(page, selectors, timeout, signal) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
+    if (signal && signal.aborted) throw abortError();
     for (const sel of selectors) {
       const el = await page.$(sel);
       if (el) return el;
@@ -266,6 +272,14 @@ async function firstMatch(page, selectors, timeout) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// Thrown by the poll loops when a user cancel (:Ham cancel) aborts the query mid-wait.
+// The backend swallows it (the Lua side already detached the turn).
+function abortError() {
+  const e = new Error('cancelled');
+  e.name = 'AbortError';
+  return e;
 }
 
 // Put `text` into the composer atomically. Typing multi-line text key-by-key would
@@ -440,9 +454,10 @@ async function countAnswers(page, selectors) {
 }
 
 // Wait until the answer-container count exceeds `baseline` (a new turn appeared).
-async function waitForNewAnswer(page, selectors, baseline, timeout) {
+async function waitForNewAnswer(page, selectors, baseline, timeout, signal) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
+    if (signal && signal.aborted) throw abortError();
     if ((await countAnswers(page, selectors)) > baseline) return true;
     await sleep(200);
   }
@@ -481,13 +496,14 @@ function captchaError() {
 // answer gained its own toolbar. That survives mid-stream pauses and, unlike a
 // per-turn toolbar check, works for follow-ups (turns share a container). Falls
 // back to a long text-idle if the toolbar signal ever fails.
-async function waitForAnswer(page, cfg, onChunk, index, toolbarBaseline) {
+async function waitForAnswer(page, cfg, onChunk, index, toolbarBaseline, signal) {
   const deadline = Date.now() + cfg.response_timeout_ms;
   let last = '';
   let sawText = false;
   let stable = 0; // consecutive polls with unchanged text
 
   while (Date.now() < deadline) {
+    if (signal && signal.aborted) throw abortError();
     const text = await readAnswer(page, cfg.response_selectors, index);
     const changed = text && text !== last;
     if (changed) {
@@ -527,7 +543,7 @@ async function waitForAnswer(page, cfg, onChunk, index, toolbarBaseline) {
 
 // Submit one turn. First turn navigates to the AI Mode URL with the query; later
 // turns type into the on-page follow-up box to preserve conversation context.
-async function ask(browser, page, text, config, onChunk) {
+async function ask(browser, page, text, config, onChunk, signal) {
   const cfg = mergeConfig(config);
 
   // Keep AI Mode streaming while Firefox is backgrounded: register the keep-alive
@@ -553,7 +569,7 @@ async function ask(browser, page, text, config, onChunk) {
     if (await detectCaptcha(page)) throw captchaError();
     // waitForAnswer also re-checks for a captcha on each poll, so a /sorry redirect
     // that lands a beat after domcontentloaded is still caught promptly.
-    return waitForAnswer(page, cfg, onChunk, 0, 0);
+    return waitForAnswer(page, cfg, onChunk, 0, 0, signal);
   }
 
   // Follow-up turn: type into the on-page composer so the conversation keeps
@@ -562,7 +578,7 @@ async function ask(browser, page, text, config, onChunk) {
   // toolbar count grows past `toolbarBaseline`.
   const before = await countAnswers(page, cfg.response_selectors);
   const toolbarBaseline = await countToolbars(page, cfg);
-  const composer = await firstMatch(page, cfg.followup_selectors, 8000);
+  const composer = await firstMatch(page, cfg.followup_selectors, 8000, signal);
   if (!composer) {
     throw new Error(
       'Could not find the AI Mode follow-up input — update followup_selectors ' +
@@ -574,7 +590,7 @@ async function ask(browser, page, text, config, onChunk) {
   await page.keyboard.press('Enter');
 
   // Enter usually submits; if no new answer container appears, click Send.
-  let appeared = await waitForNewAnswer(page, cfg.response_selectors, before, cfg.new_turn_timeout_ms);
+  let appeared = await waitForNewAnswer(page, cfg.response_selectors, before, cfg.new_turn_timeout_ms, signal);
   if (!appeared) {
     try {
       await page.evaluate((sel) => {
@@ -582,7 +598,7 @@ async function ask(browser, page, text, config, onChunk) {
         if (b) b.click();
       }, cfg.submit_button_selector);
     } catch (_) { /* ignore */ }
-    appeared = await waitForNewAnswer(page, cfg.response_selectors, before, cfg.new_turn_timeout_ms);
+    appeared = await waitForNewAnswer(page, cfg.response_selectors, before, cfg.new_turn_timeout_ms, signal);
   }
   if (!appeared) {
     // A bot-check can appear mid-conversation too; report it so ham opens the
@@ -591,7 +607,7 @@ async function ask(browser, page, text, config, onChunk) {
     throw new Error('Follow-up did not submit — the composer or submit control may have changed.');
   }
 
-  return waitForAnswer(page, cfg, onChunk, before, toolbarBaseline);
+  return waitForAnswer(page, cfg, onChunk, before, toolbarBaseline, signal);
 }
 
 module.exports = {

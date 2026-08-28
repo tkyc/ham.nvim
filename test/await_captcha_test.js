@@ -45,6 +45,25 @@ const OPT = { pollMs: 5 };
   check('NOT cleared on about:blank only',
     (await b.awaitCaptchaClear(fakeBrowser(staticPage('about:blank')), 120, OPT)) === false);
 
+  // 5. :Ham cancel while solving — an already-aborted signal stops the wait at once
+  //    (returns false fast) even though the /sorry page would otherwise run to timeout.
+  {
+    const ac = new AbortController();
+    ac.abort();
+    const t0 = Date.now();
+    const res = await b.awaitCaptchaClear(fakeBrowser(staticPage(SORRY)), 5000, { pollMs: 5, signal: ac.signal });
+    check('aborted signal stops the wait fast (returns false)', res === false && (Date.now() - t0) < 1000);
+  }
+
+  // 6. a signal that fires partway through also breaks out well before the timeout.
+  {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 30);
+    const t0 = Date.now();
+    const res = await b.awaitCaptchaClear(fakeBrowser(staticPage(SORRY)), 5000, { pollMs: 5, signal: ac.signal });
+    check('mid-wait abort breaks out before timeout', res === false && (Date.now() - t0) < 2000);
+  }
+
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
 })();

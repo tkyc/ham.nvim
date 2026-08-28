@@ -11,7 +11,7 @@ vim.api.nvim_create_user_command('Ham', function(args)
 end, {
   nargs = '?',
   complete = function()
-    return { 'open', 'close', 'toggle', 'login', 'clear', 'retry', 'explain' }
+    return { 'open', 'close', 'toggle', 'login', 'clear', 'retry', 'explain', 'cancel' }
   end,
   desc = 'Open the Google AI Mode chat panel',
 })

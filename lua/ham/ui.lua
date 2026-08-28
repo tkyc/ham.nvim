@@ -14,6 +14,7 @@ local state = {
   input_win = nil,
   messages = {}, -- { { role = 'you'|'ai'|'system', text = string }, ... }
   awaiting = false, -- a query is in flight
+  awaiting_id = nil, -- backend id of the in-flight query (so :Ham cancel can abort it)
   starting = false, -- true while Firefox + backend are coming up (shows the spinner)
   query_seq = 0, -- bumped per submit/clear; guards late replies from superseded turns
   augroup = nil, -- generation-scoped WinClosed autocmd group for the current panel
@@ -111,6 +112,7 @@ function M.clear()
   if not M.is_open() then M.open() end
   state.messages = {}
   state.awaiting = false
+  state.awaiting_id = nil
   -- Supersede any in-flight query so its late reply can't render into the cleared
   -- transcript (backend.reset also drops its handlers — this guards the seq path too).
   state.query_seq = (state.query_seq or 0) + 1
@@ -154,6 +156,7 @@ local function start_watchdog(seq, id)
         vim.defer_fn(tick, M._watchdog.interval_ms) -- alive → keep waiting, re-check later
       else
         state.awaiting = false
+        state.awaiting_id = nil
         -- Retire the wedged query's handlers so a much-later reply from it can't land
         -- in whatever turn happens to be last by then.
         backend.cancel(id)
@@ -182,14 +185,17 @@ local function send_query(text)
       if state.query_seq ~= seq then return end
       set_last_ai(t)
       state.awaiting = false
+      state.awaiting_id = nil
     end,
     on_error = function(msg)
       if state.query_seq ~= seq then return end
       set_last_ai('⚠ ' .. msg)
       state.awaiting = false
+      state.awaiting_id = nil
     end,
   })
 
+  state.awaiting_id = id
   start_watchdog(seq, id)
 end
 
@@ -225,6 +231,32 @@ function M.explain()
   send_query(config.options.explain_prompt .. '\n\n' .. snippet)
 end
 
+-- Abandon the in-flight query without tearing down the session (also /cancel and
+-- :Ham cancel). Supersedes the turn so its late reply can't render, asks the backend to
+-- abort the running operation (freeing the queue for the next query), and leaves the
+-- panel ready to ask again — unlike :Ham close, which stops the backend and Firefox.
+function M.cancel()
+  if not M.is_open() then
+    vim.notify('[ham] no chat panel open', vim.log.levels.WARN)
+    return
+  end
+  if not state.awaiting then
+    vim.notify('[ham] nothing to cancel', vim.log.levels.WARN)
+    return
+  end
+  local id = state.awaiting_id
+  state.awaiting = false
+  state.awaiting_id = nil
+  -- Bump the seq so a late on_chunk/on_done from this turn is ignored (the same guard
+  -- the watchdog uses when it gives up on a wedged query).
+  state.query_seq = (state.query_seq or 0) + 1
+  -- NOTE: we deliberately do NOT clear the input here — a :Ham cancel must not wipe a
+  -- question the user has started typing while waiting. The /cancel slash path clears its
+  -- own "/cancel" text in submit() before calling this.
+  set_last_ai('⏹ cancelled')
+  backend.abort(id) -- drop the handlers locally + tell the backend to stop working it
+end
+
 local function submit()
   if not buf_valid(state.input_buf) then return end
   local raw = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
@@ -238,6 +270,12 @@ local function submit()
   if rc and rc ~= '' and text == rc then M.retry(); return end
   local ec = config.options.explain_command
   if ec and ec ~= '' and text == ec then M.explain(); return end
+  -- /cancel must be handled BEFORE the awaiting guard below (it's the one slash command
+  -- whose whole job is to interrupt an in-flight turn).
+  local nc = config.options.cancel_command
+  -- Typed as a slash command: clear the "/cancel" text (M.cancel leaves the input alone so
+  -- the :Ham cancel command path can preserve an in-progress draft).
+  if nc and nc ~= '' and text == nc then clear_input(); M.cancel(); return end
 
   if state.awaiting then
     vim.notify('[ham] still waiting on the previous answer…', vim.log.levels.WARN)
@@ -400,6 +438,7 @@ function M.close()
   state.conv_buf = nil
   state.input_buf = nil
   state.awaiting = false
+  state.awaiting_id = nil
   state.starting = false
   -- Full teardown: stop the Node backend (which cleanly ends its Firefox session)
   -- and quit ham's headless Firefox. Reopening with :Ham relaunches both — so drop

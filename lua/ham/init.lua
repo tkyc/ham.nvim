@@ -49,6 +49,8 @@ function M._command(args)
     ui.retry()
   elseif sub == 'explain' then
     ui.explain()
+  elseif sub == 'cancel' then
+    ui.cancel()
   else
     ui.open()
   end

@@ -144,7 +144,8 @@ ui._watchdog.interval_ms = 10
 ui._watchdog.pong_ms = 10
 local orig_query = backend.query
 local orig_ping = backend.ping
-backend.query = function(_, _) return 1 end -- accept, never call handlers → stays awaiting
+local captured_handlers = nil
+backend.query = function(_, handlers) captured_handlers = handlers; return 1 end -- capture, never answer
 
 -- Case A: backend does not pong → watchdog fires and unsticks the panel.
 backend.ping = function(_) return true end -- never calls the pong cb
@@ -154,6 +155,16 @@ Ham('explain')
 pcall(vim.cmd, 'stopinsert')
 vim.wait(500, function() return conv_text():find('stopped responding', 1, true) ~= nil end, 10)
 check('watchdog fires when backend stops responding', conv_text():find('stopped responding', 1, true) ~= nil, true)
+
+-- The give-up supersedes the turn (bumps query_seq), so a chunk still arriving from that
+-- same turn must NOT repaint over the "stopped responding" message.
+if captured_handlers and captured_handlers.on_chunk then
+  captured_handlers.on_chunk('a late partial answer sneaking in')
+end
+check('late chunk after give-up keeps the stopped-responding message',
+  conv_text():find('stopped responding', 1, true) ~= nil, true)
+check('late chunk after give-up does not render into the turn',
+  conv_text():find('late partial answer', 1, true) == nil, true)
 
 -- Case B: backend pongs → watchdog keeps waiting, does NOT unstick.
 Ham('clear') -- reset transcript + awaiting

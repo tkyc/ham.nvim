@@ -64,6 +64,17 @@ async function main() {
 
     await load('<div data-subtree="aimc">The capital of France is Paris.</div>');
     check('normal answer page → not a captcha', (await browserlib.detectCaptcha(page)) === false);
+
+    // A real AI Mode page echoes the user's query into the transcript. A query that
+    // happens to contain bot-check words must NOT be mistaken for a captcha (the AI Mode
+    // DOM is present, so the free-text phrase match is suppressed).
+    await load('<div id="aim-mars-input-plate"></div><div data-subtree="aimc">'
+      + 'You asked why Google thinks you are not a robot amid unusual traffic. Here is the answer.</div>');
+    check('AI Mode page echoing bot-check words → not a captcha', (await browserlib.detectCaptcha(page)) === false);
+
+    // But the same phrases on a genuine interstitial (no AI Mode DOM) are still caught.
+    await load('<p>To continue, please verify you are a human. We have detected unusual traffic.</p>');
+    check('interstitial with bot-check words (no AI Mode DOM) → captcha', (await browserlib.detectCaptcha(page)) === true);
   } catch (err) {
     console.log('FAIL  (error) ' + err.message);
     failures.push('error: ' + err.message);

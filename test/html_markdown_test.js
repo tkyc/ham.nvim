@@ -82,6 +82,20 @@ check('huge numeric entity does not crash', (() => {
 })());
 // an already-escaped entity decodes once, not twice: &amp;lt; -> literal "&lt;", not "<"
 check('no double-decode of &amp;lt;', md.render(md.parse('<p>a &amp;lt; b</p>')) === 'a &lt; b');
+// a numeric-form ampersand must not double-decode the entity that follows it either:
+// &#38;lt; -> literal "&lt;" (browser single-pass), not "<"
+check('no double-decode of &#38;lt;', md.render(md.parse('<p>a &#38;lt; b</p>')) === 'a &lt; b');
+
+// named entities beyond the core set decode (parity with browser mode's DOM), so http
+// mode doesn't render a literal "&mdash;" where browser mode shows "—".
+check('named &mdash; -> em dash', md.render(md.parse('<p>x &mdash; y</p>')) === 'x — y');
+check('named &rsquo; -> curly apostrophe', md.render(md.parse('<p>it&rsquo;s</p>')) === 'it’s');
+check('named &hellip; -> ellipsis', md.render(md.parse('<p>wait&hellip;</p>')) === 'wait…');
+check('named &rarr; -> arrow', md.render(md.parse('<p>1 &rarr; 2</p>')) === '1 → 2');
+// an escaped named entity stays literal: &amp;mdash; -> "&mdash;", not "—"
+check('escaped &amp;mdash; stays literal', md.render(md.parse('<p>a &amp;mdash; b</p>')) === 'a &mdash; b');
+// an unknown named entity is left untouched (not dropped, not mangled)
+check('unknown named entity left literal', md.render(md.parse('<p>&zzz; end</p>')) === '&zzz; end');
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

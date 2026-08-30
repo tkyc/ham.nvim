@@ -163,11 +163,17 @@ async function detectCaptcha(page) {
   try { url = page.url() || ''; } catch (_) { return false; }
   if (/\/sorry\/|\/recaptcha\//.test(url)) return true;
   try {
-    return await page.evaluate(() => {
+    return await page.evaluate((aiSel) => {
       if (document.querySelector('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], form[action*="sorry"], #recaptcha, .g-recaptcha')) return true;
+      // A real AI Mode page echoes the user's own query into the transcript, so its text
+      // ("…not a robot…", "…unusual traffic…") must NOT trip the free-text bot-check match
+      // below. A genuine interstitial REPLACES the page and carries none of the AI Mode DOM,
+      // so only run the phrase match when that markup is absent. (The /sorry URL and the
+      // reCAPTCHA/hCaptcha widgets above are still caught regardless.)
+      if (document.querySelector(aiSel)) return false;
       const t = (document.body && document.body.innerText) || '';
       return /unusual traffic|are not a robot|not a robot|verify (that )?you'?re (a )?human|systems have detected/i.test(t);
-    });
+    }, AI_MODE_DOM);
   } catch (_) {
     return false;
   }
@@ -567,9 +573,15 @@ async function ask(browser, page, text, config, onChunk, signal) {
     const url = cfg.ai_mode_url + encodeURIComponent(text);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: cfg.nav_timeout_ms });
     if (await detectCaptcha(page)) throw captchaError();
+    // Baseline the completion-toolbar count from the freshly-loaded page instead of
+    // assuming 0: page chrome can carry a button whose aria-label matches the completion
+    // pattern (a "Share" control is the realistic one) before the answer finishes, and a
+    // hardcoded 0 would let that satisfy the done-check at the first mid-stream pause and
+    // truncate the answer. Measuring here mirrors the follow-up path below.
+    const toolbarBaseline = await countToolbars(page, cfg);
     // waitForAnswer also re-checks for a captcha on each poll, so a /sorry redirect
     // that lands a beat after domcontentloaded is still caught promptly.
-    return waitForAnswer(page, cfg, onChunk, 0, 0, signal);
+    return waitForAnswer(page, cfg, onChunk, 0, toolbarBaseline, signal);
   }
 
   // Follow-up turn: type into the on-page composer so the conversation keeps

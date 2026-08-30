@@ -200,11 +200,16 @@ local function on_exit(id, code)
   ready = false
   stopping = false
   stdout_buf = ''
-  -- Fail any in-flight requests.
+  -- Fail any in-flight requests. If the backend died mid-captcha-solve, the visible
+  -- solver window would otherwise linger (no captcha_cleared/timeout reply is coming to
+  -- flip it back), so return Firefox to its resting state once.
+  local had_captcha = false
   for pid, h in pairs(pending) do
+    if h.awaiting_captcha then had_captcha = true end
     if h.on_error then h.on_error('backend process exited') end
     pending[pid] = nil
   end
+  if had_captcha then restore_firefox_after_captcha() end
 end
 
 function M.is_running()
@@ -345,9 +350,19 @@ end
 -- results would render into the just-cleared window) and tell the backend to
 -- start a fresh conversation on the next query.
 function M.reset()
-  for id in pairs(pending) do
+  -- If a query is parked on a captcha solve, simply dropping its handler would strand the
+  -- visible solver window: the later captcha_cleared / timeout reply then finds no handler
+  -- and never flips Firefox back. Abort the backend's solve-wait and restore Firefox first
+  -- — the same cleanup M.abort does for a single cancelled captcha turn.
+  local had_captcha = false
+  for id, h in pairs(pending) do
+    if h.awaiting_captcha then
+      M._send({ type = 'cancel', id = id }) -- stop the backend's captcha solve-wait
+      had_captcha = true
+    end
     pending[id] = nil
   end
+  if had_captcha then restore_firefox_after_captcha() end
   if ready then
     M._send({ type = 'reset' })
   else
@@ -365,5 +380,11 @@ function M.stop()
     ready = false
   end
 end
+
+-- Test seams: let the suite drive the real protocol dispatch and process-exit handling
+-- (which are otherwise reached only through a live jobstart), so the captcha-teardown
+-- paths above can be exercised without spawning Node/Firefox.
+M._dispatch = dispatch
+M._on_exit = on_exit
 
 return M

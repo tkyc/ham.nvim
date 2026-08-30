@@ -157,8 +157,10 @@ local function start_watchdog(seq, id)
       else
         state.awaiting = false
         state.awaiting_id = nil
-        -- Retire the wedged query's handlers so a much-later reply from it can't land
-        -- in whatever turn happens to be last by then.
+        -- Supersede the turn (like every other give-up/clear/cancel path) so a chunk
+        -- already in flight from this seq can't repaint over the message below, then
+        -- retire the wedged query's handlers so a much-later reply can't land either.
+        state.query_seq = (state.query_seq or 0) + 1
         backend.cancel(id)
         set_last_ai('⚠ backend stopped responding — try /retry, or :Ham close and reopen.')
       end

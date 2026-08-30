@@ -19,7 +19,14 @@ function M.check()
   -- query mode
   local mode = opts.backend.mode or 'http'
   if mode == 'http' then
-    h_ok('query mode: http (browserless token-chaining fetcher; Firefox only for login + captcha)')
+    -- Only a dedicated on-disk profile lets queries run with no Firefox at all; on the
+    -- shared default profile every query harvests cookies from a running Firefox, so don't
+    -- claim "Firefox only for login + captcha" there (the cookie line below says as much).
+    if config.uses_disk_cookies() then
+      h_ok('query mode: http (browserless token-chaining fetcher; Firefox only for login + captcha)')
+    else
+      h_ok('query mode: http (browserless token-chaining fetcher; cookies harvested from a running Firefox)')
+    end
     -- Cookie source: on a dedicated profile, queries read cookies straight from disk.
     local prof = opts.firefox.profile
     if prof and prof ~= '' then

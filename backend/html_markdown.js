@@ -17,14 +17,38 @@
 const VOID = new Set(['AREA', 'BASE', 'BR', 'COL', 'EMBED', 'HR', 'IMG', 'INPUT',
   'LINK', 'META', 'PARAM', 'SOURCE', 'TRACK', 'WBR']);
 
+// Named entities beyond the core set (which browser mode gets for free from the DOM).
+// Google answers are largely UTF-8 / numeric, but typographic punctuation (em/en dashes,
+// curly quotes, ellipsis) and a few symbols do arrive as named entities; without this they
+// render literally in http mode where browser mode decodes them. `amp` is deliberately
+// EXCLUDED here so it can be resolved LAST (see decodeEntities). Not exhaustive — the
+// numeric forms cover anything not listed.
+const NAMED_ENTITIES = {
+  lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  mdash: '—', ndash: '–', hellip: '…',
+  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”',
+  sbquo: '‚', bdquo: '„', laquo: '«', raquo: '»',
+  copy: '©', reg: '®', trade: '™', deg: '°',
+  plusmn: '±', times: '×', divide: '÷', middot: '·',
+  bull: '•', dagger: '†', Dagger: '‡', sect: '§',
+  para: '¶', prime: '′', Prime: '″',
+  ensp: ' ', emsp: ' ', thinsp: ' ',
+  euro: '€', pound: '£', yen: '¥', cent: '¢',
+  larr: '←', rarr: '→', uarr: '↑', darr: '↓', harr: '↔',
+};
+
 function decodeEntities(s) {
   // Clamp out-of-range code points instead of passing them to String.fromCodePoint,
   // which throws RangeError for anything > 0x10FFFF (e.g. a degenerate &#9999999999;)
   // and would otherwise crash the whole render.
   const cp = (n) => (Number.isFinite(n) && n >= 0 && n <= 0x10FFFF ? String.fromCodePoint(n) : '�');
   return (s || '')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ')
+    // Named entities (except amp) in one non-overlapping left-to-right pass. An escaped
+    // entity like &amp;lt; has its &amp; consumed by this scan as an unknown name (left as
+    // "&amp;"), so the following "lt;" is NOT decoded here — preventing a double-decode.
+    // Unknown names are left untouched.
+    .replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (m, name) =>
+      Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, name) ? NAMED_ENTITIES[name] : m)
     .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => cp(parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, n) => cp(parseInt(n, 10)))
     // &amp; LAST, so an already-escaped entity like &amp;lt; decodes to the literal

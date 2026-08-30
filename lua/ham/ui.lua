@@ -263,13 +263,15 @@ local function submit()
   local text = vim.trim(table.concat(raw, '\n'))
   if text == '' then return end
 
-  -- Slash commands mirror the :Ham subcommands.
+  -- Slash commands mirror the :Ham subcommands. Clear the slash text from the input box
+  -- as we dispatch (like /cancel below): otherwise a command rejected because a query is
+  -- in flight would leave "/retry" / "/explain" sitting in the box.
   local cc = config.options.clear_command
   if cc and cc ~= '' and text == cc then M.clear(); return end
   local rc = config.options.retry_command
-  if rc and rc ~= '' and text == rc then M.retry(); return end
+  if rc and rc ~= '' and text == rc then clear_input(); M.retry(); return end
   local ec = config.options.explain_command
-  if ec and ec ~= '' and text == ec then M.explain(); return end
+  if ec and ec ~= '' and text == ec then clear_input(); M.explain(); return end
   -- /cancel must be handled BEFORE the awaiting guard below (it's the one slash command
   -- whose whole job is to interrupt an in-flight turn).
   local nc = config.options.cancel_command

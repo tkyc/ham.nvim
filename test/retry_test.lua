@@ -69,6 +69,21 @@ check('/retry adds a second You turn', count('▶ You'), 2)
 check('/retry re-asked the same question', count('what is the tallest mountain'), 2)
 check('the literal "/retry" is not shown as a turn', conv_text():find('/retry', 1, true) == nil, true)
 
+-- /retry rejected because a query is in flight must still wipe its own "/retry" text
+-- from the input box. Stub backend.query so the turn stays `awaiting` (a dead backend
+-- would otherwise error out and clear it before we can submit the /retry).
+local backend = require('ham.backend')
+local orig_query = backend.query
+backend.query = function() return 1 end -- accept, never call handlers → stays awaiting
+ui.clear() -- reset transcript + awaiting to a known state
+submit('a question that never answers') -- awaiting = true
+check('setup: one turn while awaiting', count('▶ You'), 1)
+submit('/retry') -- rejected: "still waiting on the previous answer…"
+local input_text = table.concat(vim.api.nvim_buf_get_lines(input.buf, 0, -1, false), '\n')
+check('/retry rejected while awaiting clears the input box', input_text, '')
+check('/retry rejected while awaiting adds no new turn', count('▶ You'), 1)
+backend.query = orig_query
+
 if #failures == 0 then
   print('\nALL PASS')
   os.exit(0)

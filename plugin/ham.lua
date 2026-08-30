@@ -10,8 +10,11 @@ vim.api.nvim_create_user_command('Ham', function(args)
   require('ham')._command(args)
 end, {
   nargs = '?',
-  complete = function()
-    return { 'open', 'close', 'toggle', 'login', 'clear', 'retry', 'explain', 'cancel' }
+  complete = function(arg_lead)
+    local subs = { 'open', 'close', 'toggle', 'login', 'clear', 'retry', 'explain', 'cancel' }
+    -- A function `complete` uses customlist semantics: Neovim does NOT filter the
+    -- returned list by what's typed, so narrow it to the prefix ourselves.
+    return vim.tbl_filter(function(s) return s:find(arg_lead, 1, true) == 1 end, subs)
   end,
   desc = 'Open the Google AI Mode chat panel',
 })

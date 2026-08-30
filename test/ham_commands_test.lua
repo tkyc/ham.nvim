@@ -44,6 +44,14 @@ end
 
 check('command registered', vim.api.nvim_get_commands({}).Ham ~= nil, true)
 
+-- Subcommand completion must narrow to the typed prefix. A function `complete` uses
+-- customlist semantics (Neovim does NOT filter it for us), so the plugin filters itself.
+local function comp(lead) return vim.fn.getcompletion('Ham ' .. lead, 'cmdline') end
+check('completion: "cl" -> close,clear', table.concat(comp('cl'), ','), 'close,clear')
+check('completion: "c" -> close,clear,cancel', table.concat(comp('c'), ','), 'close,clear,cancel')
+check('completion: empty prefix -> all 8', #comp(''), 8)
+check('completion: no match -> empty', #comp('zzz'), 0)
+
 check('closed initially', ui.is_open(), false)
 
 local start_win = vim.api.nvim_get_current_win()

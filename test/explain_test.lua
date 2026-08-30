@@ -69,6 +69,22 @@ check('includes register line 1', contains('local function add(a, b)'), true)
 check('includes register line 2 (multi-line kept)', contains('return a + b'), true)
 check('the literal "/explain" is not shown', contains('/explain'), false)
 
+-- /explain rejected because a query is in flight must still wipe its own "/explain" text
+-- from the input box. Stub backend.query so the turn stays `awaiting` (a dead backend
+-- would otherwise error out and clear it before we can submit the /explain).
+local backend = require('ham.backend')
+local orig_query = backend.query
+backend.query = function() return 1 end -- accept, never call handlers → stays awaiting
+ui.clear() -- reset transcript + awaiting to a known state
+vim.fn.setreg('"', 'local y = 2')
+submit('a question that never answers') -- awaiting = true
+check('setup: one turn while awaiting', count_you(), 1)
+submit('/explain') -- rejected: "still waiting on the previous answer…"
+local input_text = table.concat(vim.api.nvim_buf_get_lines(input.buf, 0, -1, false), '\n')
+check('/explain rejected while awaiting clears the input box', input_text, '')
+check('/explain rejected while awaiting adds no new turn', count_you(), 1)
+backend.query = orig_query
+
 if #failures == 0 then
   print('\nALL PASS')
   os.exit(0)

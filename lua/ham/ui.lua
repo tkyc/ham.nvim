@@ -1,5 +1,6 @@
--- The :ham chat panel: a vertical split holding a read-only conversation buffer
--- on top and a small editable input buffer below.
+-- The :ham chat panel: a read-only conversation buffer on top and a small
+-- editable input buffer below. Laid out either as a vertical split alongside the
+-- editor (default) or in its own full-width tabpage (`:Ham tab`).
 
 local config = require('ham.config')
 local backend = require('ham.backend')
@@ -18,6 +19,7 @@ local state = {
   starting = false, -- true while Firefox + backend are coming up (shows the spinner)
   query_seq = 0, -- bumped per submit/clear; guards late replies from superseded turns
   augroup = nil, -- generation-scoped WinClosed autocmd group for the current panel
+  layout = nil, -- 'vsplit' | 'tab': how the current panel is laid out
 }
 
 -- Bumped on every open(); lets a deferred timer tell whether it belongs to the
@@ -340,17 +342,24 @@ function M.is_open()
   return win_valid(state.conv_win) == true
 end
 
-function M.open()
+-- layout: 'vsplit' (side panel) | 'tab' (own tabpage). Defaults to split.layout.
+function M.open(layout)
   if M.is_open() then
+    -- Already open: focus the existing panel and ignore the requested layout (to
+    -- switch layout, :Ham close then reopen).
     focus_input()
     return
   end
 
-  -- Remember the window the user was in so opening the panel doesn't steal the
-  -- cursor: ham builds the split, then hands focus straight back.
+  local opts = config.options
+  layout = layout or opts.split.layout or 'vsplit'
+  if layout ~= 'tab' then layout = 'vsplit' end -- unknown value → safe fallback
+
+  -- Remember the window the user was in so the vsplit layout doesn't steal the
+  -- cursor: ham builds the split, then hands focus straight back. (The tab layout
+  -- deliberately lands you in the new tab instead — see the focus block below.)
   local prev_win = vim.api.nvim_get_current_win()
 
-  local opts = config.options
   state.conv_buf = make_scratch()
   state.input_buf = make_scratch()
   -- Render the transcript as markdown so headings, bold, lists and links from the
@@ -359,28 +368,47 @@ function M.open()
   vim.bo[state.input_buf].filetype = 'ham-input'
   vim.bo[state.conv_buf].modifiable = false
 
-  -- Compute the chat panel width: width_pct of the screen (default 45%), unless a
-  -- fixed `width` override is given.
-  local width = opts.split.width
-  if not width then
-    width = math.floor(vim.o.columns * (opts.split.width_pct or 45) / 100)
+  if layout == 'tab' then
+    -- Dedicated tabpage: conversation full-width on top, input box below it.
+    -- `tab split` (not `tabnew`) so the new tab reuses the current buffer instead of
+    -- creating a throwaway [No Name] one — that empty buffer would leak on every
+    -- open, since close() only wipes ham's two scratch buffers. We swap our scratch
+    -- buffer into the window immediately below.
+    vim.cmd('tab split')
+    state.conv_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(state.conv_win, state.conv_buf)
+    apply_win_opts(state.conv_win, true)
+
+    vim.cmd('belowright split')
+    state.input_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
+    vim.api.nvim_win_set_height(state.input_win, opts.split.input_height)
+    apply_win_opts(state.input_win)
+  else
+    -- Compute the chat panel width: width_pct of the screen (default 45%), unless a
+    -- fixed `width` override is given.
+    local width = opts.split.width
+    if not width then
+      width = math.floor(vim.o.columns * (opts.split.width_pct or 45) / 100)
+    end
+    width = math.max(20, width)
+
+    -- Vertical split to the chosen side; the new window becomes current.
+    local split_cmd = opts.split.side == 'left' and 'topleft vsplit' or 'botright vsplit'
+    vim.cmd(split_cmd)
+    state.conv_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_width(state.conv_win, width)
+    vim.api.nvim_win_set_buf(state.conv_win, state.conv_buf)
+    apply_win_opts(state.conv_win, true)
+
+    -- Input box below the conversation, inside the same column.
+    vim.cmd('belowright split')
+    state.input_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
+    vim.api.nvim_win_set_height(state.input_win, opts.split.input_height)
+    apply_win_opts(state.input_win)
   end
-  width = math.max(20, width)
-
-  -- Vertical split to the chosen side; the new window becomes current.
-  local split_cmd = opts.split.side == 'left' and 'topleft vsplit' or 'botright vsplit'
-  vim.cmd(split_cmd)
-  state.conv_win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_width(state.conv_win, width)
-  vim.api.nvim_win_set_buf(state.conv_win, state.conv_buf)
-  apply_win_opts(state.conv_win, true)
-
-  -- Input box below the conversation, inside the same column.
-  vim.cmd('belowright split')
-  state.input_win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
-  vim.api.nvim_win_set_height(state.input_win, opts.split.input_height)
-  apply_win_opts(state.input_win)
+  state.layout = layout
 
   set_keymaps()
   open_generation = open_generation + 1
@@ -420,9 +448,11 @@ function M.open()
     end
   end, (config.options.firefox.launch_timeout_ms or 20000) + 3000)
 
-  -- Return the cursor to where it was; opening the panel must not move focus or
-  -- start insert mode. (Use :Ham again, or the focus_input keymap, to jump in.)
-  if win_valid(prev_win) then
+  -- vsplit: return the cursor to where it was; opening the panel must not move focus
+  -- or start insert mode. (Use :Ham again, or the focus_input keymap, to jump in.)
+  -- tab: opening a tab is an explicit context switch — leave the cursor in the new
+  -- tab's input box (already current from the belowright split), in normal mode.
+  if layout == 'vsplit' and win_valid(prev_win) then
     vim.api.nvim_set_current_win(prev_win)
   end
 end
@@ -441,6 +471,7 @@ function M.close()
   state.input_win = nil
   state.conv_buf = nil
   state.input_buf = nil
+  state.layout = nil
   state.awaiting = false
   state.awaiting_id = nil
   state.starting = false

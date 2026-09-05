@@ -11,7 +11,7 @@ vim.api.nvim_create_user_command('Ham', function(args)
 end, {
   nargs = '?',
   complete = function(arg_lead)
-    local subs = { 'open', 'close', 'toggle', 'login', 'clear', 'retry', 'explain', 'cancel' }
+    local subs = { 'open', 'close', 'toggle', 'tab', 'login', 'clear', 'retry', 'explain', 'cancel' }
     -- A function `complete` uses customlist semantics: Neovim does NOT filter the
     -- returned list by what's typed, so narrow it to the prefix ourselves.
     return vim.tbl_filter(function(s) return s:find(arg_lead, 1, true) == 1 end, subs)

@@ -49,7 +49,8 @@ check('command registered', vim.api.nvim_get_commands({}).Ham ~= nil, true)
 local function comp(lead) return vim.fn.getcompletion('Ham ' .. lead, 'cmdline') end
 check('completion: "cl" -> close,clear', table.concat(comp('cl'), ','), 'close,clear')
 check('completion: "c" -> close,clear,cancel', table.concat(comp('c'), ','), 'close,clear,cancel')
-check('completion: empty prefix -> all 8', #comp(''), 8)
+check('completion: "t" -> toggle,tab', table.concat(comp('t'), ','), 'toggle,tab')
+check('completion: empty prefix -> all 9', #comp(''), 9)
 check('completion: no match -> empty', #comp('zzz'), 0)
 
 check('closed initially', ui.is_open(), false)
@@ -178,6 +179,59 @@ check('watchdog does NOT fire while backend pongs', conv_text():find('stopped re
 Ham('clear') -- awaiting → false, stops the running watchdog
 backend.query = orig_query
 backend.ping = orig_ping
+Ham('close') -- start the layout tests from a clean slate
+
+-- Tab layout: :Ham tab opens the panel in its own tabpage (conversation full-width
+-- on top, input box below) and lands the cursor in the tab's input box.
+local config = require('ham.config')
+local function ham_wins_in_tab(tp)
+  local n = 0
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(tp)) do
+    local ft = vim.bo[vim.api.nvim_win_get_buf(w)].filetype
+    if ft == 'markdown' or ft == 'ham-input' then n = n + 1 end
+  end
+  return n
+end
+
+local function count_listed_bufs() return #vim.fn.getbufinfo({ buflisted = 1 }) end
+
+local tabs_before = #vim.api.nvim_list_tabpages()
+Ham('tab')
+check(':Ham tab opens the panel', ui.is_open(), true)
+check(':Ham tab creates a new tabpage', #vim.api.nvim_list_tabpages(), tabs_before + 1)
+check(':Ham tab lands cursor in the input box',
+  vim.bo[vim.api.nvim_get_current_buf()].filetype, 'ham-input')
+check(':Ham tab puts both panel windows in the new tab',
+  ham_wins_in_tab(vim.api.nvim_get_current_tabpage()), 2)
+Ham('close')
+check('closing the tab panel tears the tab down', #vim.api.nvim_list_tabpages(), tabs_before)
+check('closed after tab panel close', ui.is_open(), false)
+
+-- The tab layout must not leak buffers across open/close cycles. `tab split` reuses the
+-- current buffer (a `tabnew` would create a throwaway [No Name] buffer that close() —
+-- which only wipes ham's two scratch buffers — would leave behind, one per open).
+local bufs_before = count_listed_bufs()
+for _ = 1, 3 do Ham('tab'); Ham('close') end
+check('tab open/close does not leak buffers', count_listed_bufs(), bufs_before)
+
+-- Already open: :Ham tab must just focus the existing panel, never stack a second one
+-- or spawn an extra tab (decision: to switch layout you close then reopen).
+Ham('') -- open a vsplit panel
+check('vsplit open before :Ham tab', ui.is_open(), true)
+local tabs_with_vsplit = #vim.api.nvim_list_tabpages()
+Ham('tab') -- requested tab, but a vsplit is already open
+check(':Ham tab on an open vsplit does not add a tab', #vim.api.nvim_list_tabpages(), tabs_with_vsplit)
+check(':Ham tab on an open panel keeps it open', ui.is_open(), true)
+Ham('close')
+
+-- split.layout = 'tab' makes plain :Ham open in a tab too.
+config.options.split.layout = 'tab'
+tabs_before = #vim.api.nvim_list_tabpages()
+Ham('') -- :Ham (open), no subcommand
+check('split.layout=tab: plain :Ham opens a tab', #vim.api.nvim_list_tabpages(), tabs_before + 1)
+check('split.layout=tab: panel open', ui.is_open(), true)
+Ham('close')
+config.options.split.layout = 'vsplit' -- restore default for any later assertions
 
 if #failures == 0 then
   print('\nALL PASS')

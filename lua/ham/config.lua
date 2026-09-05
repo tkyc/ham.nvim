@@ -19,7 +19,8 @@ M.defaults = {
 
   -- UI
   split = {
-    side = 'right', -- 'right' | 'left'
+    layout = 'vsplit', -- 'vsplit' (side panel) | 'tab' (own tabpage, full width)
+    side = 'right', -- 'right' | 'left' (vsplit layout only)
     width_pct = 45, -- chat panel takes 45% of screen width (editor keeps 55%)
     width = nil, -- optional fixed column override; when set, wins over width_pct
     input_height = 6, -- rows for the input box

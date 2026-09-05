@@ -59,6 +59,7 @@ Then just **`:Ham`** — type your question in the input box and press `<CR>`
 | `:Ham` | Open the chat panel (focuses the input box if already open) |
 | `:Ham close` | Close the panel, stop the backend, and quit ham's headless Firefox |
 | `:Ham toggle` | Open if closed, close if open |
+| `:Ham tab` | Open the panel in its own tab (full width) instead of a side split |
 | `:Ham login` | One-time: open a visible Firefox to sign into Google |
 | `:Ham clear` | Wipe the transcript and start a fresh AI Mode conversation |
 | `:Ham retry` | Re-ask your last question |
@@ -112,7 +113,8 @@ Defaults shown; pass overrides to `setup()`:
 require('ham').setup({
   node_cmd = 'node',
   split = {
-    side = 'right',      -- 'right' | 'left'
+    layout = 'vsplit',   -- 'vsplit' (side panel) | 'tab' (own tabpage, full width)
+    side = 'right',      -- 'right' | 'left' (vsplit layout only)
     width_pct = 45,      -- chat panel = 45% of screen (editor keeps 55%)
     width = nil,         -- optional fixed columns; overrides width_pct when set
     input_height = 6,

@@ -41,6 +41,8 @@ function M._command(args)
     ui.close()
   elseif sub == 'toggle' then
     ui.toggle()
+  elseif sub == 'tab' then
+    ui.open('tab')
   elseif sub == 'login' then
     M.login()
   elseif sub == 'clear' then

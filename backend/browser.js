@@ -15,6 +15,7 @@
 
 const puppeteer = require('puppeteer-core');
 const htmlmd = require('./html_markdown');
+const { sleep, abortError } = require('./util');
 
 const DEFAULTS = {
   host: '127.0.0.1',
@@ -276,18 +277,6 @@ async function firstMatch(page, selectors, timeout, signal) {
   return null;
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-// Thrown by the poll loops when a user cancel (:Ham cancel) aborts the query mid-wait.
-// The backend swallows it (the Lua side already detached the turn).
-function abortError() {
-  const e = new Error('cancelled');
-  e.name = 'AbortError';
-  return e;
-}
-
 // Put `text` into the composer atomically. Typing multi-line text key-by-key would
 // send the embedded newline as Enter and submit the query early, so we set the
 // value directly (via the native setter, so a framework-controlled textarea still
@@ -342,8 +331,22 @@ async function readAnswer(page, selectors, index) {
       return (s || '').replace(/\s+/g, ' ');
     }
 
+    // A formula's text is its LaTeX source (the glyphs are SVG). Emits the marker that
+    // htmlmd.finishMarkdown formats (see html_markdown.js "math" for the contract).
+    function mathMarker(el) {
+      const src = el.hasAttribute('data-xpm-latex') ? el : el.querySelector('[data-xpm-latex]');
+      return '\uE000' + (src ? src.getAttribute('data-xpm-latex') : '') + '\uE001';
+    }
+
     function cellText(el) {
-      return norm(el.innerText || el.textContent).trim().replace(/\|/g, '\\|');
+      let t = el.innerText || el.textContent;
+      if (el.querySelector('[data-xpm-copy-root]')) {
+        // innerText would give the SVG glyphs (or nothing); swap each formula for its marker.
+        const c = el.cloneNode(true);
+        c.querySelectorAll('[data-xpm-copy-root]').forEach((m) => m.replaceWith(mathMarker(m)));
+        t = c.textContent;
+      }
+      return norm(t).trim().replace(/\|/g, '\\|');
     }
 
     // Convert a <table> into a GitHub-flavored Markdown table.
@@ -368,6 +371,10 @@ async function readAnswer(page, selectors, index) {
       const cs = window.getComputedStyle(node);
       if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return;
 
+      if (node.hasAttribute('data-xpm-copy-root')) {
+        buf.push(mathMarker(node));
+        return;
+      }
       // Fenced code block: preserve whitespace and newlines verbatim.
       if (tag === 'PRE') {
         const code = (node.innerText || node.textContent || '').replace(/\n+$/, '');

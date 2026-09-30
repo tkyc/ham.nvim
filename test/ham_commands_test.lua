@@ -10,7 +10,7 @@ vim.opt.runtimepath:append(root)
 vim.cmd('runtime plugin/ham.lua')
 
 local ham = require('ham')
-ham.setup({ firefox = { manage = false }, backend = { port = 9999 } })
+ham.setup({ firefox = { manage = false, profile = '' }, backend = { port = 9999 } })
 local ui = require('ham.ui')
 local backend = require('ham.backend')
 
@@ -47,10 +47,11 @@ check('command registered', vim.api.nvim_get_commands({}).Ham ~= nil, true)
 -- Subcommand completion must narrow to the typed prefix. A function `complete` uses
 -- customlist semantics (Neovim does NOT filter it for us), so the plugin filters itself.
 local function comp(lead) return vim.fn.getcompletion('Ham ' .. lead, 'cmdline') end
-check('completion: "cl" -> close,clear', table.concat(comp('cl'), ','), 'close,clear')
-check('completion: "c" -> close,clear,cancel', table.concat(comp('c'), ','), 'close,clear,cancel')
-check('completion: "t" -> toggle,tab', table.concat(comp('t'), ','), 'toggle,tab')
+check('completion: "cl" -> clear,close', table.concat(comp('cl'), ','), 'clear,close')
+check('completion: "c" -> cancel,clear,close', table.concat(comp('c'), ','), 'cancel,clear,close')
+check('completion: "t" -> tab,toggle', table.concat(comp('t'), ','), 'tab,toggle')
 check('completion: empty prefix -> all 9', #comp(''), 9)
+check('completion lists exactly the dispatchable subcommands', table.concat(comp(''), ','), table.concat(ham.subcommands(), ','))
 check('completion: no match -> empty', #comp('zzz'), 0)
 -- Past the first word it's a free-form :Ham <query>: no subcommand suggestions.
 check('completion: inside a query -> empty', #comp('what does c'), 0)
@@ -138,6 +139,14 @@ backend.is_running = function() return false end
 login_called = false
 Ham('login')
 check(':Ham login proceeds when backend not running', login_called, true)
+
+-- Panel open but its backend not up yet (Firefox still starting, or crashed): login would
+-- flip Firefox out from under the panel, so it's refused too.
+Ham('')
+login_called = false
+Ham('login')
+check(':Ham login blocked while the panel is open', login_called, false)
+Ham('close')
 backend.is_running = orig_is_running
 
 -- Liveness watchdog: with the backend stubbed to accept a query but never answer, the
@@ -149,6 +158,9 @@ local orig_query = backend.query
 local orig_ping = backend.ping
 local captured_handlers = nil
 backend.query = function(_, handlers) captured_handlers = handlers; return 1 end -- capture, never answer
+-- The watchdog only pings a running backend (a not-yet-started one is still coming up), so
+-- pretend it's running — the suite never spawns a real one.
+backend.is_running = function() return true end
 
 -- Case A: backend does not pong → watchdog fires and unsticks the panel.
 backend.ping = function(_) return true end -- never calls the pong cb
@@ -181,6 +193,7 @@ check('watchdog does NOT fire while backend pongs', conv_text():find('stopped re
 Ham('clear') -- awaiting → false, stops the running watchdog
 backend.query = orig_query
 backend.ping = orig_ping
+backend.is_running = orig_is_running
 Ham('close') -- start the layout tests from a clean slate
 
 -- Tab layout: :Ham tab opens the panel in its own tabpage (conversation full-width
@@ -268,6 +281,18 @@ vim.api.nvim_set_current_tabpage(panel_tab)
 check('re-entering the tab restores the width', vim.api.nvim_win_get_width(conv_w), want_width)
 vim.cmd('tabonly')
 Ham('close')
+
+-- Closing both panel windows at once (:tabclose on the tab layout) schedules a close per
+-- window; the teardown (backend + Firefox) must run only once.
+local closes = 0
+local orig_ff_close = firefox.close
+firefox.close = function() closes = closes + 1 end
+Ham('tab')
+vim.cmd('tabclose')
+vim.wait(100, function() return false end, 10) -- let both scheduled closes run
+check(':tabclose on the tab panel tears down once', closes, 1)
+check(':tabclose closes the panel', ui.is_open(), false)
+firefox.close = orig_ff_close
 
 if #failures == 0 then
   print('\nALL PASS')

@@ -147,7 +147,20 @@ function find(node, pred) {
 
 // ---- renderer (ported from browser.js readAnswer) ---------------------------
 
-const SKIP = new Set(['BUTTON', 'SVG', 'PATH', 'IMG', 'STYLE', 'SCRIPT', 'NOSCRIPT', 'INPUT', 'TEXTAREA']);
+// ANNOTATION: MathML's source-text copy of a formula, never displayed by browsers — keeping
+// it would print every math value twice (once from <mn>/<mi>, once from the annotation).
+const SKIP = new Set(['BUTTON', 'SVG', 'PATH', 'IMG', 'STYLE', 'SCRIPT', 'NOSCRIPT', 'INPUT', 'TEXTAREA',
+  'ANNOTATION', 'ANNOTATION-XML']);
+// Roles that are UI, not prose: live-region toasts ("Copied to clipboard") and dialogs (the
+// share sheet). Browser mode drops these by computed style; off-DOM they carry no
+// inline-style cue. role="button" is dropped only on block containers (widgets like the
+// attachments panel) — an inline one may be an entity chip inside a sentence.
+const UI_ROLES = new Set(['status', 'alert', 'dialog', 'alertdialog']);
+const BLOCK = /^(DIV|SECTION|LI|ARTICLE|UL|OL|TABLE)$/;
+// The visually-hidden accessibility heading AI Mode puts atop each answer (echoing the
+// question). It's hidden by a screen-reader-only class — not display:none, so even browser
+// mode's computed-style check keeps it — so only its text identifies it (finishMarkdown).
+const A11Y_HEADING = /^### AI Mode reply for\b/i;
 const SOURCE = /^(\+\d+|sources?|wikipedia|encyclopedia britannica|britannica|youtube|reddit|linkedin|facebook|instagram|twitter)$/i;
 const LANGS = new Set(['python', 'py', 'javascript', 'js', 'typescript', 'ts', 'java', 'c',
   'cpp', 'c++', 'csharp', 'cs', 'go', 'golang', 'rust', 'rs', 'ruby', 'rb', 'php', 'bash',
@@ -157,6 +170,28 @@ const BOILERPLATE = /^(use code with caution\.?|expand_more|content_copy|thumb_u
 
 function norm(s) { return (s || '').replace(/\s+/g, ' '); }
 
+// ---- math -------------------------------------------------------------------
+// AI Mode draws each formula as SVG glyphs (which both renderers skip), so the only
+// faithful text is its LaTeX source in data-xpm-latex: on the data-xpm-copy-root element
+// for a multi-glyph formula, or on its single glyph image otherwise. Both walkers (this one
+// and browser.js readAnswer's in-page copy) emit a MARKER '\uE000' + latex + '\uE001' for
+// each formula, and finishMarkdown formats it, so the formatting rule lives in one place.
+// (data-xpm-math-type is NOT display-vs-inline — Google marks inline fractions "block" —
+// so a formula's placement comes from its surrounding markup, like any other text.)
+const MATH_RE = /\uE000([^\uE001]*)\uE001/g;
+
+function mathMarker(node) {
+  const src = find(node, (n) => 'data-xpm-latex' in n.attrs);
+  return '\uE000' + (src ? src.attrs['data-xpm-latex'] : '') + '\uE001';
+}
+
+// A plain value ("6", "O(n)") reads best as-is; real LaTeX goes in standard Markdown $…$
+// math delimiters for markdown renderers to display.
+function formatMath(latex) {
+  const t = latex.trim();
+  return /[\\^_{}]/.test(t) ? '$' + t + '$' : t;
+}
+
 // Concatenated descendant text (entity-decoded). raw=true preserves whitespace/newlines
 // (for <pre>); otherwise whitespace is collapsed (matching readAnswer's norm(innerText)).
 function textOf(node, raw) {
@@ -164,6 +199,7 @@ function textOf(node, raw) {
   (function rec(nd) {
     if (nd.type === 'text') { out += nd.value; return; }
     if (nd.type === 'element' && SKIP.has(nd.tag)) return;
+    if (nd.type === 'element' && 'data-xpm-copy-root' in nd.attrs) { out += mathMarker(nd); return; }
     if (nd.children) for (const c of nd.children) rec(c);
   })(node);
   out = decodeEntities(out);
@@ -173,7 +209,10 @@ function textOf(node, raw) {
 function isHidden(node) {
   const a = node.attrs || {};
   if (a['aria-hidden'] === 'true') return true;
-  if ('hidden' in a) return true;
+  // `popover` elements are hidden until opened; data-ignore-copy marks what Google itself
+  // excludes from the answer's copy text.
+  if ('hidden' in a || 'popover' in a || 'data-ignore-copy' in a) return true;
+  if (UI_ROLES.has(a.role) || (a.role === 'button' && BLOCK.test(node.tag))) return true;
   const st = (a.style || '').replace(/\s+/g, '').toLowerCase();
   return st.includes('display:none') || st.includes('visibility:hidden');
 }
@@ -184,7 +223,7 @@ function isCitation(node) {
   if (SOURCE.test(textOf(node).trim())) return true;
   // Citation source CARDS are block-level chips with data-src-id; drop those but keep
   // inline entity chips. Off-DOM we approximate "block" by tag.
-  if ('data-src-id' in a && /^(DIV|SECTION|LI|ARTICLE|UL|OL|TABLE)$/.test(node.tag)) return true;
+  if ('data-src-id' in a && BLOCK.test(node.tag)) return true;
   return false;
 }
 
@@ -220,6 +259,10 @@ function walk(node, buf) {
   const tag = node.tag;
   if (SKIP.has(tag) || isCitation(node) || isHidden(node)) return;
 
+  if ('data-xpm-copy-root' in node.attrs) {
+    buf.push(mathMarker(node));
+    return;
+  }
   if (tag === 'PRE') {
     const code = textOf(node, true).replace(/\n+$/, '');
     if (code) buf.push('\n```\n' + code + '\n```\n');
@@ -269,7 +312,7 @@ function walk(node, buf) {
 // This is the single source of truth for that pass: browser.js's in-page DOM walk returns
 // its raw buffer and calls this too, so both query modes render identically.
 function finishMarkdown(rawText) {
-  const rawLines = String(rawText || '').split('\n');
+  const rawLines = String(rawText || '').replace(MATH_RE, (_, latex) => formatMath(latex)).split('\n');
   const out = [];
   let inCode = false;
   let prevBlank = false;
@@ -301,7 +344,7 @@ function finishMarkdown(rawText) {
     l = l.replace(/\*\*([^*]*)\*\*/g, (m, inner) => (inner.trim() ? m : ''));
     l = l.replace(/\*([^*]*)\*/g, (m, inner) => (inner.trim() ? m : ''));
     l = l.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/, '');
-    if (SOURCE.test(l) || BOILERPLATE.test(l)) continue;
+    if (SOURCE.test(l) || BOILERPLATE.test(l) || A11Y_HEADING.test(l)) continue;
     if (l.trim() === '-' || l.trim() === '###') continue;
     if (l === '' && prevBlank) continue;
     out.push(l);
@@ -310,14 +353,11 @@ function finishMarkdown(rawText) {
   return out.join('\n').replace(/\n{4,}/g, '\n\n\n').trim();
 }
 
-function toMarkdown(root) {
-  const buf = [];
-  walk(root, buf);
-  return finishMarkdown(buf.join(''));
-}
-
+// Render a parsed tree (from parse) to finished Markdown.
 function render(node) {
-  return toMarkdown(node);
+  const buf = [];
+  walk(node, buf);
+  return finishMarkdown(buf.join(''));
 }
 
 module.exports = { parse, render, find, decodeEntities, finishMarkdown };

@@ -42,22 +42,10 @@ end
 
 -- Synchronous variant (pumps the loop) for :checkhealth.
 function M.is_up_sync(host, port, timeout_ms)
-  local done, result = false, false
-  local tcp = uv.new_tcp()
-  local timer = uv.new_timer()
-  timer:start(timeout_ms, 0, function()
-    if not done then done = true; pcall(function() tcp:close() end) end
-  end)
-  tcp:connect(host, port, function(err)
-    if not done then
-      done = true; result = err == nil
-      pcall(function() timer:stop() end); pcall(function() tcp:close() end)
-    end
-  end)
-  local deadline = uv.now() + timeout_ms + 100
-  while not done and uv.now() < deadline do uv.run('nowait') end
-  pcall(function() timer:close() end)
-  return result
+  local result
+  M.is_up(host, port, timeout_ms, function(ok) result = ok end)
+  vim.wait(timeout_ms + 100, function() return result ~= nil end, 10)
+  return result == true
 end
 
 -- Async: is a Firefox process running? Calls cb(bool).
@@ -70,20 +58,13 @@ function M.is_running(cb)
   end)
 end
 
--- The dedicated profile dir (nil when reusing the default profile).
-local function dedicated(opts)
-  local p = opts.firefox.profile
-  if p and p ~= '' then return p end
-  return nil
-end
-
 -- Launch ham's Firefox. mode = { headless = bool (default from config), url = str }.
 local function launch(opts, mode)
   mode = mode or {}
   local headless = mode.headless
   if headless == nil then headless = opts.firefox.headless ~= false end
   local args = { opts.firefox.cmd, '--remote-debugging-port', tostring(opts.backend.port) }
-  local prof = dedicated(opts)
+  local prof = config.dedicated_profile()
   if prof then
     vim.fn.mkdir(prof, 'p') -- Firefox populates a fresh profile here on first run
     -- --new-instance + a distinct profile ⇒ a SEPARATE instance from the user's
@@ -118,6 +99,12 @@ local function wait_up(host, port, deadline, cb)
   end)
 end
 
+-- Launch ham's Firefox in `mode` (see launch), then cb(true) once its debug port is up.
+local function launch_and_wait(opts, mode, deadline, cb)
+  launch(opts, mode)
+  wait_up(opts.backend.host, opts.backend.port, deadline, cb)
+end
+
 -- Poll until the debug port is released (ham's instance owns it, so this signals
 -- our old instance has exited and the profile lock is free), then a short delay.
 local function wait_port_down(host, port, deadline, done)
@@ -132,25 +119,25 @@ local function wait_port_down(host, port, deadline, done)
   end)
 end
 
--- Quit ONLY ham's Firefox by matching the debug-port flag on its command line.
--- The user's normal browsing Firefox never has --remote-debugging-port, so it is
--- never touched (regardless of profile). pkill skips its own PID.
+-- `pkill -f` pattern matching ONLY ham's Firefox by the debug-port flag on its command
+-- line. The user's normal browsing Firefox never has --remote-debugging-port, so it is
+-- never touched (regardless of profile). Anchored after the port so 9222 can't match
+-- 92220. pkill skips its own PID.
+local function ham_pattern(opts)
+  return 'remote-debugging-port ' .. tostring(opts.backend.port) .. '( |$)'
+end
+
 local function quit(opts, done)
-  local pattern = 'remote-debugging-port ' .. tostring(opts.backend.port)
-  vim.system({ 'pkill', '-f', pattern }, {}, function()
+  vim.system({ 'pkill', '-f', ham_pattern(opts) }, {}, function()
     wait_port_down(opts.backend.host, opts.backend.port, uv.now() + 10000, done)
   end)
 end
 
 -- Quit (if running) then relaunch in the given mode, cb(true) once the port is up.
 local function flip(opts, mode, cb)
-  local host, port = opts.backend.host, opts.backend.port
   local deadline = uv.now() + opts.firefox.launch_timeout_ms
-  local function do_launch()
-    launch(opts, mode)
-    wait_up(host, port, deadline, cb)
-  end
-  M.is_up(host, port, 800, function(up)
+  local function do_launch() launch_and_wait(opts, mode, deadline, cb) end
+  M.is_up(opts.backend.host, opts.backend.port, 800, function(up)
     if up then quit(opts, do_launch) else do_launch() end
   end)
 end
@@ -170,24 +157,23 @@ function M.ensure(cb)
     end
 
     local deadline = uv.now() + opts.firefox.launch_timeout_ms
+    local function do_launch() launch_and_wait(opts, nil, deadline, cb) end
 
     -- Dedicated profile: ham's instance is separate from the user's Firefox, so
     -- there's no conflict — just launch ours (headless).
-    if dedicated(opts) then
+    if config.dedicated_profile() then
       notify('launching Firefox (headless)…')
-      launch(opts)
-      wait_up(host, port, deadline, cb)
+      do_launch()
       return
     end
 
     -- Default-profile fallback: ham shares the user's profile, so a running Firefox
     -- (no debug port) must be fully restarted into debug mode (broad kill).
     M.is_running(function(running)
-      local function do_launch() launch(opts); wait_up(host, port, deadline, cb) end
       if running then
         if opts.firefox.auto_restart then
           notify('restarting Firefox in debug mode…')
-          vim.system({ 'pkill', 'firefox' }, {}, function()
+          vim.system({ 'pkill', '-x', 'firefox' }, {}, function() -- same match as is_running
             wait_port_down(host, port, uv.now() + 10000, do_launch)
           end)
         else
@@ -247,7 +233,7 @@ function M.close()
   local opts = config.options
   if not opts.firefox.manage then return end
   if opts.firefox.close_on_stop == false then return end
-  pcall(vim.fn.system, { 'pkill', '-f', 'remote-debugging-port ' .. tostring(opts.backend.port) })
+  pcall(vim.fn.system, { 'pkill', '-f', ham_pattern(opts) })
 end
 
 return M

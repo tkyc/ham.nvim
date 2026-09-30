@@ -9,6 +9,7 @@ local job = nil -- channel id from jobstart
 local ready = false
 local stopping = false -- true when we deliberately jobstop()
 local ensuring = false -- true while bringing Firefox + backend up
+local start_gen = 0 -- bumped by stop(); a Firefox start still in flight from before is stale
 local stdout_buf = ''
 local next_id = 0
 local pending = {} -- id -> { on_chunk, on_done, on_error }
@@ -21,19 +22,24 @@ local function decode(line)
   return nil
 end
 
--- Return Firefox to its resting state after a captcha episode that will NOT resume
--- (the user cancelled, the solve timed out, or ham gave up): flip the visible solver
--- window back to headless, or in http-disk mode fully quit it (queries then read cookies
--- from disk again). Fire-and-forget. The happy path (captcha_cleared) does this itself as
--- part of resuming, so this only covers the abandoned paths. No-op when ham doesn't
--- manage Firefox (then no solver was ever opened).
-local function restore_firefox_after_captcha()
-  if not config.options.firefox.manage then return end
+-- Return Firefox to its resting state after a captcha episode, then cb(ok, err). In
+-- http-disk mode fully CLOSE it (flushing the fresh exemption to cookies.sqlite; queries
+-- then read cookies from disk, no headless browser needed); otherwise (browser mode and
+-- shared-profile http) flip the visible solver window back to headless.
+local function rest_firefox(cb)
   if config.uses_disk_cookies() then
-    firefox.quit(function() end)
+    firefox.quit(function() cb(true) end)
   else
-    firefox.to_headless(function() end)
+    firefox.to_headless(cb)
   end
+end
+
+-- The same, fire-and-forget, for a captcha episode that will NOT resume (the user
+-- cancelled, the solve timed out, or ham gave up). The happy path (captcha_cleared) rests
+-- Firefox itself as part of resuming. No-op when ham doesn't manage Firefox (then no
+-- solver was ever opened).
+local function restore_firefox_after_captcha()
+  if config.options.firefox.manage then rest_firefox(function() end) end
 end
 
 local function dispatch(msg)
@@ -67,6 +73,7 @@ local function dispatch(msg)
       h.awaiting_captcha = false -- the resume below owns the Firefox flip from here
       vim.notify('[ham] captcha solved — resuming…', vim.log.levels.INFO)
       local function resume(ok, err)
+        if not pending[msg.id] then return end -- cancelled/cleared during the flip; don't re-send
         if ok then
           M._send({ type = 'query', id = msg.id, text = h.text })
         elseif h.on_error then
@@ -74,14 +81,7 @@ local function dispatch(msg)
           pending[msg.id] = nil
         end
       end
-      if config.uses_disk_cookies() then
-        -- http mode reads cookies from disk: fully CLOSE Firefox (flushing the fresh
-        -- exemption to cookies.sqlite), then re-send — no headless browser needed.
-        firefox.quit(function() resume(true) end)
-      else
-        -- browser mode (and shared-profile http): flip back to headless to continue.
-        firefox.to_headless(resume)
-      end
+      rest_firefox(resume)
     end
   elseif msg.type == 'error' then
     -- Orphaned-session recovery: the port is up but Firefox refuses new BiDi
@@ -280,7 +280,9 @@ function M.start(cb)
   end
 
   ensuring = true
+  local gen = start_gen
   firefox.ensure(function(ok, err)
+    if gen ~= start_gen then return end -- stopped while Firefox was coming up: don't spawn
     ensuring = false
     if not ok then
       vim.notify('[ham] ' .. (err or 'could not start Firefox'), vim.log.levels.ERROR)
@@ -350,19 +352,10 @@ end
 -- results would render into the just-cleared window) and tell the backend to
 -- start a fresh conversation on the next query.
 function M.reset()
-  -- If a query is parked on a captcha solve, simply dropping its handler would strand the
-  -- visible solver window: the later captcha_cleared / timeout reply then finds no handler
-  -- and never flips Firefox back. Abort the backend's solve-wait and restore Firefox first
-  -- — the same cleanup M.abort does for a single cancelled captcha turn.
-  local had_captcha = false
-  for id, h in pairs(pending) do
-    if h.awaiting_captcha then
-      M._send({ type = 'cancel', id = id }) -- stop the backend's captcha solve-wait
-      had_captcha = true
-    end
-    pending[id] = nil
-  end
-  if had_captcha then restore_firefox_after_captcha() end
+  -- Abort every in-flight query, not just drop its handler: otherwise the backend keeps
+  -- working an abandoned answer (and the reset + next question queue behind it), and a
+  -- query parked on a captcha would strand the visible solver window.
+  for id in pairs(pending) do M.abort(id) end
   if ready then
     M._send({ type = 'reset' })
   else
@@ -372,13 +365,24 @@ function M.reset()
   end
 end
 
+-- Stop the backend and quit ham's headless Firefox (firefox.close decides whether it
+-- should), and abandon a start that's still in progress: without this a panel
+-- closed while Firefox was coming up would still spawn an orphan backend afterwards, and
+-- its queued ready callbacks (e.g. the old query's send) would fire on the NEXT backend.
 function M.stop()
+  start_gen = start_gen + 1
+  ensuring = false
+  ready = false
+  pong_cbs = {}
   if job then
+    on_ready_cbs = {}
     stopping = true
     pcall(vim.fn.jobstop, job)
-    job = nil
-    ready = false
+    job = nil -- on_exit fails the in-flight handlers
+  else
+    flush_start_failure('backend stopped') -- never spawned: no on_exit is coming to fail them
   end
+  firefox.close()
 end
 
 -- Test seams: let the suite drive the real protocol dispatch and process-exit handling

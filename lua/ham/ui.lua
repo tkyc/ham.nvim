@@ -4,7 +4,6 @@
 
 local config = require('ham.config')
 local backend = require('ham.backend')
-local firefox = require('ham.firefox')
 
 local M = {}
 
@@ -13,7 +12,7 @@ local state = {
   conv_win = nil,
   input_buf = nil,
   input_win = nil,
-  messages = {}, -- { { role = 'you'|'ai'|'system', text = string }, ... }
+  messages = {}, -- { { role = 'you'|'ai', text = string }, ... }
   awaiting = false, -- a query is in flight
   awaiting_id = nil, -- backend id of the in-flight query (so :Ham cancel can abort it)
   starting = false, -- true while Firefox + backend are coming up (shows the spinner)
@@ -56,13 +55,7 @@ local function render_lines()
   end
 
   for _, m in ipairs(state.messages) do
-    if m.role == 'you' then
-      push_block('## ▶ You', m.text)
-    elseif m.role == 'ai' then
-      push_block('## ◆ AI Mode', m.text)
-    else
-      push_block('> ' .. (m.text or ''), '')
-    end
+    push_block(m.role == 'you' and '## ▶ You' or '## ◆ AI Mode', m.text)
   end
   return lines
 end
@@ -109,15 +102,34 @@ local function clear_input()
   end
 end
 
+-- The current turn is no longer waiting (answered, failed, cancelled or given up on).
+local function end_turn()
+  state.awaiting = false
+  state.awaiting_id = nil
+end
+
+-- Retire the current turn: bump the seq so a late chunk/done/error from it can't render
+-- (every clear/cancel/give-up path), and end its wait.
+local function supersede()
+  state.query_seq = state.query_seq + 1
+  end_turn()
+end
+
+-- True (and warns) while a query is in flight; new questions must wait for it.
+local function busy()
+  if state.awaiting then
+    vim.notify('[ham] still waiting on the previous answer…', vim.log.levels.WARN)
+  end
+  return state.awaiting
+end
+
 -- Wipe the conversation window and start a fresh AI Mode conversation.
 function M.clear()
   if not M.is_open() then M.open() end
   state.messages = {}
-  state.awaiting = false
-  state.awaiting_id = nil
   -- Supersede any in-flight query so its late reply can't render into the cleared
   -- transcript (backend.reset also drops its handlers — this guards the seq path too).
-  state.query_seq = (state.query_seq or 0) + 1
+  supersede()
   clear_input()
   redraw()
   backend.reset() -- drop pending results + reset the AI Mode conversation
@@ -157,12 +169,10 @@ local function start_watchdog(seq, id)
       if ponged then
         vim.defer_fn(tick, M._watchdog.interval_ms) -- alive → keep waiting, re-check later
       else
-        state.awaiting = false
-        state.awaiting_id = nil
-        -- Supersede the turn (like every other give-up/clear/cancel path) so a chunk
-        -- already in flight from this seq can't repaint over the message below, then
-        -- retire the wedged query's handlers so a much-later reply can't land either.
-        state.query_seq = (state.query_seq or 0) + 1
+        -- Supersede the turn so a chunk already in flight from this seq can't repaint
+        -- over the message below, then retire the wedged query's handlers so a
+        -- much-later reply can't land either.
+        supersede()
         backend.cancel(id)
         set_last_ai('⚠ backend stopped responding — try /retry, or :Ham close and reopen.')
       end
@@ -176,27 +186,20 @@ local function send_query(text)
   table.insert(state.messages, { role = 'you', text = text })
   table.insert(state.messages, { role = 'ai', text = '' })
   state.awaiting = true
-  state.query_seq = (state.query_seq or 0) + 1
+  state.query_seq = state.query_seq + 1
   local seq = state.query_seq
   redraw()
   scroll_new_turn_to_top() -- put the new question at the top; answer fills below
 
   -- Guard every handler by `seq`: if this query has been superseded (a new submit, a
   -- /clear, or a watchdog give-up) its late reply must not write into a later turn.
+  local function finish(t)
+    if state.query_seq == seq then set_last_ai(t); end_turn() end
+  end
   local id = backend.query(text, {
     on_chunk = function(t) if state.query_seq == seq then set_last_ai(t) end end,
-    on_done = function(t)
-      if state.query_seq ~= seq then return end
-      set_last_ai(t)
-      state.awaiting = false
-      state.awaiting_id = nil
-    end,
-    on_error = function(msg)
-      if state.query_seq ~= seq then return end
-      set_last_ai('⚠ ' .. msg)
-      state.awaiting = false
-      state.awaiting_id = nil
-    end,
+    on_done = finish,
+    on_error = function(msg) finish('⚠ ' .. msg) end,
   })
 
   state.awaiting_id = id
@@ -206,12 +209,8 @@ end
 -- Re-ask the last question (also the /retry command and :Ham retry).
 function M.retry()
   if not M.is_open() then M.open() end
-  if state.awaiting then
-    vim.notify('[ham] still waiting on the previous answer…', vim.log.levels.WARN)
-    return
-  end
+  if busy() then return end
   local q = last_query()
-  clear_input()
   if not q then
     vim.notify('[ham] nothing to retry yet', vim.log.levels.WARN)
     return
@@ -223,12 +222,8 @@ end
 -- the yanked text. `what` names the action in the "nothing yanked" warning.
 local function ask_about_yank(prompt, what)
   if not M.is_open() then M.open() end
-  if state.awaiting then
-    vim.notify('[ham] still waiting on the previous answer…', vim.log.levels.WARN)
-    return
-  end
+  if busy() then return end
   local snippet = (vim.fn.getreg('"') or ''):gsub('%s+$', '')
-  clear_input()
   if snippet == '' then
     vim.notify('[ham] nothing yanked to ' .. what, vim.log.levels.WARN)
     return
@@ -266,11 +261,7 @@ function M.cancel()
     return
   end
   local id = state.awaiting_id
-  state.awaiting = false
-  state.awaiting_id = nil
-  -- Bump the seq so a late on_chunk/on_done from this turn is ignored (the same guard
-  -- the watchdog uses when it gives up on a wedged query).
-  state.query_seq = (state.query_seq or 0) + 1
+  supersede() -- a late on_chunk/on_done from this turn is ignored
   -- NOTE: we deliberately do NOT clear the input here — a :Ham cancel must not wipe a
   -- question the user has started typing while waiting. The /cancel slash path clears its
   -- own "/cancel" text in submit() before calling this.
@@ -284,33 +275,24 @@ local function submit()
   local text = vim.trim(table.concat(raw, '\n'))
   if text == '' then return end
 
-  -- Slash commands mirror the :Ham subcommands. Clear the slash text from the input box
-  -- as we dispatch (like /cancel below): otherwise a command rejected because a query is
-  -- in flight would leave "/retry" / "/explain" sitting in the box.
-  local cc = config.options.clear_command
-  if cc and cc ~= '' and text == cc then M.clear(); return end
-  local rc = config.options.retry_command
-  if rc and rc ~= '' and text == rc then clear_input(); M.retry(); return end
-  local ec = config.options.explain_command
-  if ec and ec ~= '' and text == ec then clear_input(); M.explain(); return end
+  -- Slash commands mirror their :Ham subcommands (config: <name>_command). Clear the
+  -- slash text from the input box as we dispatch — the commands themselves leave it alone
+  -- so :Ham retry/cancel/… preserve a draft — otherwise a command rejected because a query
+  -- is in flight would leave "/retry" sitting in the box. Dispatching before the busy
+  -- guard below is what lets /cancel interrupt an in-flight turn.
+  local opts = config.options
+  for _, name in ipairs({ 'clear', 'retry', 'explain', 'cancel' }) do
+    local slash = opts[name .. '_command']
+    if slash and slash ~= '' and text == slash then clear_input(); M.commands[name](); return end
+  end
   -- /ask <question>: the command, then whitespace (a space or newline), then the query.
   -- Bare "/ask" is caught too so it warns instead of being sent as a literal question.
-  local ac = config.options.ask_command
+  local ac = opts.ask_command
   if ac and ac ~= '' and (text == ac or text:match('^' .. vim.pesc(ac) .. '%s')) then
     clear_input(); M.ask(text:sub(#ac + 1)); return
   end
-  -- /cancel must be handled BEFORE the awaiting guard below (it's the one slash command
-  -- whose whole job is to interrupt an in-flight turn).
-  local nc = config.options.cancel_command
-  -- Typed as a slash command: clear the "/cancel" text (M.cancel leaves the input alone so
-  -- the :Ham cancel command path can preserve an in-progress draft).
-  if nc and nc ~= '' and text == nc then clear_input(); M.cancel(); return end
 
-  if state.awaiting then
-    vim.notify('[ham] still waiting on the previous answer…', vim.log.levels.WARN)
-    return
-  end
-
+  if busy() then return end
   clear_input()
   send_query(text)
 end
@@ -397,8 +379,8 @@ function M.open(layout)
   end
 
   local opts = config.options
-  layout = layout or opts.split.layout or 'vsplit'
-  if layout ~= 'tab' then layout = 'vsplit' end -- unknown value → safe fallback
+  layout = layout or opts.split.layout
+  if layout ~= 'tab' then layout = 'vsplit' end -- unset/unknown value → safe fallback
 
   -- Remember the window the user was in so the vsplit layout doesn't steal the
   -- cursor: ham builds the split, then hands focus straight back. (The tab layout
@@ -413,38 +395,27 @@ function M.open(layout)
   vim.bo[state.input_buf].filetype = 'ham-input'
   vim.bo[state.conv_buf].modifiable = false
 
+  -- The conversation window: a dedicated tabpage (full width), or a vertical split to
+  -- the chosen side. `tab split` (not `tabnew`) so the new tab reuses the current buffer
+  -- instead of creating a throwaway [No Name] one — that empty buffer would leak on
+  -- every open, since close() only wipes ham's two scratch buffers. Either way the new
+  -- window becomes current and we swap our scratch buffer into it.
   if layout == 'tab' then
-    -- Dedicated tabpage: conversation full-width on top, input box below it.
-    -- `tab split` (not `tabnew`) so the new tab reuses the current buffer instead of
-    -- creating a throwaway [No Name] one — that empty buffer would leak on every
-    -- open, since close() only wipes ham's two scratch buffers. We swap our scratch
-    -- buffer into the window immediately below.
     vim.cmd('tab split')
-    state.conv_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(state.conv_win, state.conv_buf)
-    apply_win_opts(state.conv_win, true)
-
-    vim.cmd('belowright split')
-    state.input_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
-    vim.api.nvim_win_set_height(state.input_win, opts.split.input_height)
-    apply_win_opts(state.input_win)
   else
-    -- Vertical split to the chosen side; the new window becomes current.
-    local split_cmd = opts.split.side == 'left' and 'topleft vsplit' or 'botright vsplit'
-    vim.cmd(split_cmd)
-    state.conv_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_width(state.conv_win, vsplit_width())
-    vim.api.nvim_win_set_buf(state.conv_win, state.conv_buf)
-    apply_win_opts(state.conv_win, true)
-
-    -- Input box below the conversation, inside the same column.
-    vim.cmd('belowright split')
-    state.input_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
-    vim.api.nvim_win_set_height(state.input_win, opts.split.input_height)
-    apply_win_opts(state.input_win)
+    vim.cmd(opts.split.side == 'left' and 'topleft vsplit' or 'botright vsplit')
+    vim.api.nvim_win_set_width(0, vsplit_width())
   end
+  state.conv_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(state.conv_win, state.conv_buf)
+  apply_win_opts(state.conv_win, true)
+
+  -- Input box below the conversation (inside the same column for the vsplit).
+  vim.cmd('belowright split')
+  state.input_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
+  vim.api.nvim_win_set_height(state.input_win, opts.split.input_height)
+  apply_win_opts(state.input_win)
   state.layout = layout
 
   set_keymaps()
@@ -515,6 +486,9 @@ function M.open(layout)
 end
 
 function M.close()
+  -- Already torn down. Closing both panel windows at once (e.g. :tabclose on the tab
+  -- layout) schedules a close per window; only the first should stop the backend.
+  if not state.conv_buf then return end
   -- Drop the WinClosed watcher FIRST so closing the panel windows below doesn't
   -- re-enter M.close through it.
   if state.augroup then pcall(vim.api.nvim_del_augroup_by_id, state.augroup); state.augroup = nil end
@@ -529,20 +503,31 @@ function M.close()
   state.conv_buf = nil
   state.input_buf = nil
   state.layout = nil
-  state.awaiting = false
-  state.awaiting_id = nil
+  supersede()
   state.starting = false
-  -- Full teardown: stop the Node backend (which cleanly ends its Firefox session)
-  -- and quit ham's headless Firefox. Reopening with :Ham relaunches both — so drop
-  -- the transcript too, otherwise the reopened panel would show a conversation the
-  -- fresh backend has no memory of.
+  -- Full teardown: stop the Node backend and ham's headless Firefox. Reopening with :Ham
+  -- relaunches both — so drop the transcript too, otherwise the reopened panel would
+  -- show a conversation the fresh backend has no memory of.
   state.messages = {}
   backend.stop()
-  firefox.close()
 end
 
 function M.toggle()
   if M.is_open() then M.close() else M.open() end
 end
+
+-- The :Ham subcommands that act on the panel (init.lua adds login). :Ham <name> and its
+-- /<name> slash command both dispatch through here; anything else typed after :Ham is a
+-- question for M.ask.
+M.commands = {
+  open = function() M.open() end,
+  tab = function() M.open('tab') end,
+  close = M.close,
+  toggle = M.toggle,
+  clear = M.clear,
+  retry = M.retry,
+  explain = M.explain,
+  cancel = M.cancel,
+}
 
 return M

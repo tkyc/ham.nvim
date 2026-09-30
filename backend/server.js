@@ -36,22 +36,20 @@ let currentAbort = null; // AbortController for the job the pump is currently ru
 let currentJobId = null; // its id, so a 'cancel' can target the running job
 let captchaWait = null; // { id, abort } while awaiting a captcha solve (not a pump job)
 
-// HTTP mode (config.mode === 'http'): answer over plain HTTP via the token-chaining
-// fetcher instead of driving the DOM. `conversation` holds the multi-turn token
-// chain; `cookieStale` forces a cookie re-harvest after a captcha/Firefox restart.
-let conversation = null;
-let cookieStale = false;
-
-function isHttpMode() {
-  return config.mode === 'http';
-}
-
 function send(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
 }
 
 function fail(id, err) {
-  send({ type: 'error', id: id == null ? null : id, message: err.message || String(err), code: err.code });
+  send({ type: 'error', id: id ?? null, message: err.message || String(err), code: err.code });
+}
+
+// Connect to Firefox and make it the session browser. The 'disconnected' guard only clears
+// THIS instance, so a late event from a just-killed Firefox can't null a fresher one.
+async function attach() {
+  const b = await browserlib.connect(config);
+  b.on('disconnected', () => { if (browser === b) { browser = null; page = null; } });
+  browser = b;
 }
 
 async function ensureConnected() {
@@ -64,13 +62,7 @@ async function ensureConnected() {
       page = null;
     }
   }
-  if (!browser) {
-    const b = await browserlib.connect(config);
-    // Guard: only clear if THIS instance is still current, so a late 'disconnected'
-    // from a just-killed Firefox can't null a freshly-reconnected browser.
-    b.on('disconnected', () => { if (browser === b) { browser = null; page = null; } });
-    browser = b;
-  }
+  if (!browser) await attach();
   if (!page || page.isClosed()) {
     page = await browserlib.ensurePage(browser);
   }
@@ -143,59 +135,95 @@ async function bootstrapCookies() {
   throw e;
 }
 
-// Lazily build the HTTP conversation, or refresh just its cookies after a captcha /
-// Firefox restart (keeping the token chain so context survives).
-async function ensureConversation() {
-  if (!conversation) {
+// ---- query engines ----------------------------------------------------------
+// One per backend.mode, chosen when the config arrives. Each answers a job (replying via
+// send), starts a fresh conversation on reset, and notes errors that affect its state;
+// handleQuery/pump hold the mode-independent retry, cancel and queueing logic.
+
+// http: answer over plain HTTP via the token-chaining fetcher instead of driving the
+// DOM. `conversation` holds the multi-turn token chain; `cookieStale` forces a cookie
+// re-harvest after a captcha/Firefox restart.
+const httpEngine = {
+  conversation: null,
+  cookieStale: false,
+
+  // Lazily build the conversation, or refresh just its cookies after a captcha /
+  // Firefox restart (keeping the token chain so context survives).
+  async ensureConversation() {
+    if (this.conversation && !this.cookieStale) return;
     const { cookies, ua } = await bootstrapCookies();
-    conversation = new httpFetcher.Conversation({ cookies, ua });
-  } else if (cookieStale) {
-    const { cookies, ua } = await bootstrapCookies();
-    conversation.refreshCookies(cookies, ua);
-    cookieStale = false;
-  }
-}
+    if (this.conversation) this.conversation.refreshCookies(cookies, ua);
+    else this.conversation = new httpFetcher.Conversation({ cookies, ua });
+    this.cookieStale = false;
+  },
+
+  async ask(job, signal) {
+    await this.ensureConversation();
+    const { answer } = await this.conversation.ask(job.text, signal);
+    // A response can be "answerable" (has the aimc container) yet render to nothing if
+    // the answer markup drifted. Browser mode throws in that case; match it here so ham
+    // surfaces a clear error instead of a silent, permanently-blank turn.
+    if (!answer || !answer.trim()) {
+      throw new Error('No answer text found in the AI Mode response — the markup may '
+        + 'have changed (see backend/http_fetcher.js extractAnswer).');
+    }
+    send({ type: 'done', id: job.id, text: answer }); // one-shot; no streaming
+  },
+
+  // Next query starts a fresh first turn (new thread), which harvests cookies itself.
+  async reset() {
+    this.conversation = null;
+    this.cookieStale = false;
+  },
+
+  // Only a real bot-check (ECAPTCHA) means the cookie jar is stale and worth
+  // re-harvesting. A plain dropped socket (a transient network blip against google.com)
+  // does NOT imply stale cookies, so don't force a re-harvest.
+  onError(err) {
+    if (err.code === 'ECAPTCHA') this.cookieStale = true;
+  },
+};
+
+// browser: drive the AI Mode DOM in the session tab, streaming chunks as they render.
+const browserEngine = {
+  async ask(job, signal) {
+    await ensureConnected();
+    const final = await browserlib.ask(browser, page, job.text, config, (partial) => {
+      send({ type: 'chunk', id: job.id, text: partial });
+    }, signal);
+    send({ type: 'done', id: job.id, text: final });
+  },
+
+  // Navigate the driven tab to about:blank so the next query is treated as a first turn
+  // (new thread) rather than a follow-up.
+  async reset() {
+    if (page && !page.isClosed()) {
+      await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 10000 });
+    }
+  },
+
+  onError() {},
+};
+
+let engine = browserEngine; // until a config says otherwise (browser was the original mode)
 
 async function handleQuery(job, signal) {
   const deadline = Date.now() + 30000;
   for (let attempt = 1; ; attempt++) {
     try {
-      if (isHttpMode()) {
-        await ensureConversation();
-        const { answer } = await conversation.ask(job.text, signal);
-        // A response can be "answerable" (has the aimc container) yet render to nothing
-        // if the answer markup drifted. Browser mode throws in that case; match it here
-        // so ham surfaces a clear error instead of a silent, permanently-blank turn.
-        if (!answer || !answer.trim()) {
-          throw new Error('No answer text found in the AI Mode response — the markup may '
-            + 'have changed (see backend/http_fetcher.js extractAnswer).');
-        }
-        send({ type: 'done', id: job.id, text: answer }); // one-shot; no streaming
-      } else {
-        await ensureConnected();
-        const final = await browserlib.ask(browser, page, job.text, config, (partial) => {
-          send({ type: 'chunk', id: job.id, text: partial });
-        }, signal);
-        send({ type: 'done', id: job.id, text: final });
-      }
-      return;
+      return await engine.ask(job, signal);
     } catch (err) {
       // Cancelled by the user (:Ham cancel): stop immediately — don't retry, don't
       // re-harvest cookies. The pump swallows it (the Lua side already detached the turn).
       if (signal && signal.aborted) throw err;
-      // Only a real bot-check (ECAPTCHA) means the HTTP conversation's cookie jar is
-      // stale and worth re-harvesting. A plain dropped socket (a transient network blip
-      // against google.com) does NOT imply stale cookies, so don't force a re-harvest.
-      if (isHttpMode() && err.code === 'ECAPTCHA') cookieStale = true;
-      // A connection drop is usually Firefox restarted under us (browser mode's
-      // captcha/headless flip). Retry connecting to the fresh instance for a while so
-      // the post-captcha re-send runs instead of dying on a "Connection closed". Only
-      // browser mode holds a session browser/page to drop; in http mode they're unused.
+      engine.onError(err);
+      // A connection drop is usually Firefox restarted under us (the captcha/headless
+      // flip). Drop the dead handle and retry against the fresh instance for a while so
+      // the post-captcha re-send runs instead of dying on a "Connection closed". (http
+      // mode uses it too: harvestViaBrowser reuses the connection awaitCaptchaCleared made.)
       if (isConnDropped(err) && attempt <= 8 && Date.now() < deadline) {
-        if (!isHttpMode()) {
-          browser = null;
-          page = null;
-        }
+        browser = null;
+        page = null;
         await new Promise((r) => setTimeout(r, Math.min(500 * attempt, 2500)));
         continue;
       }
@@ -216,7 +244,7 @@ async function pump() {
       if (job.kind === 'reset') {
         // Serialized with queries so a reset can't navigate/clear state out from under
         // an in-flight answer (which would destroy it mid-stream).
-        try { await resetConversation(); } catch (_) { /* best-effort */ }
+        try { await engine.reset(); } catch (_) { /* best-effort; the next query still starts fresh */ }
         continue;
       }
       currentAbort = new AbortController();
@@ -264,9 +292,7 @@ async function awaitCaptchaCleared(id) {
   try {
     browser = null;
     page = null;
-    const b = await browserlib.connect(config);
-    b.on('disconnected', () => { if (browser === b) { browser = null; page = null; } });
-    browser = b;
+    await attach();
     const cleared = await browserlib.awaitCaptchaClear(browser, 180000, { signal: ac.signal });
     if (ac.signal.aborted) return; // cancelled: the Lua side restores Firefox; stay silent
     if (cleared) send({ type: 'captcha_cleared', id });
@@ -276,21 +302,6 @@ async function awaitCaptchaCleared(id) {
   } finally {
     if (captchaWait && captchaWait.id === id) captchaWait = null;
   }
-}
-
-// Start a fresh AI Mode conversation: navigate the driven tab to about:blank so
-// the next query is treated as a first turn (new thread) rather than a follow-up.
-async function resetConversation() {
-  if (isHttpMode()) {
-    conversation = null; // next query starts a fresh first turn (new thread)
-    cookieStale = false; // the fresh Conversation harvests cookies itself; don't double-harvest
-    return;
-  }
-  try {
-    if (page && !page.isClosed()) {
-      await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 10000 });
-    }
-  } catch (_) { /* best-effort; the next query will still navigate fresh */ }
 }
 
 function handleLine(line) {
@@ -307,6 +318,7 @@ function handleLine(line) {
   switch (msg.type) {
     case 'config':
       config = msg.config || {};
+      engine = config.mode === 'http' ? httpEngine : browserEngine;
       break;
     case 'ping':
       send({ type: 'pong' });

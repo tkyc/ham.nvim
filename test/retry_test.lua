@@ -13,7 +13,7 @@ vim.o.lines = 40
 vim.o.columns = 100
 vim.cmd('runtime plugin/ham.lua')
 
-require('ham').setup({ firefox = { manage = false }, backend = { port = 9999 } })
+require('ham').setup({ firefox = { manage = false, profile = '' }, backend = { port = 9999 } })
 local ui = require('ham.ui')
 ui.open()
 pcall(vim.cmd, 'stopinsert')
@@ -68,6 +68,14 @@ submit('/retry')
 check('/retry adds a second You turn', count('▶ You'), 2)
 check('/retry re-asked the same question', count('what is the tallest mountain'), 2)
 check('the literal "/retry" is not shown as a turn', conv_text():find('/retry', 1, true) == nil, true)
+
+-- :Ham retry (the command, not the slash) must leave a draft in the input box alone,
+-- like :Ham cancel does.
+vim.wait(5000, function() return count('⚠') == 2 end, 100) -- the /retry turn errored too
+vim.api.nvim_buf_set_lines(input.buf, 0, -1, false, { 'a draft in progress' })
+ui.retry()
+check(':Ham retry keeps the input draft', table.concat(vim.api.nvim_buf_get_lines(input.buf, 0, -1, false), '\n'), 'a draft in progress')
+check(':Ham retry re-asked', count('▶ You'), 3)
 
 -- /retry rejected because a query is in flight must still wipe its own "/retry" text
 -- from the input box. Stub backend.query so the turn stays `awaiting` (a dead backend

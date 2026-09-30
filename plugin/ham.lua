@@ -14,10 +14,9 @@ end, {
   complete = function(arg_lead, cmd_line)
     -- Only the first word is a subcommand; past it you're typing a free-form query.
     if cmd_line:match('^%s*%S+%s+%S+%s') then return {} end
-    local subs = { 'open', 'close', 'toggle', 'tab', 'login', 'clear', 'retry', 'explain', 'cancel' }
     -- A function `complete` uses customlist semantics: Neovim does NOT filter the
     -- returned list by what's typed, so narrow it to the prefix ourselves.
-    return vim.tbl_filter(function(s) return s:find(arg_lead, 1, true) == 1 end, subs)
+    return vim.tbl_filter(function(s) return vim.startswith(s, arg_lead) end, require('ham').subcommands())
   end,
   desc = 'Open the Google AI Mode chat panel',
 })

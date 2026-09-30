@@ -11,7 +11,7 @@ vim.o.lines = 40
 vim.o.columns = 100
 vim.cmd('runtime plugin/ham.lua')
 
-require('ham').setup({ firefox = { manage = false }, backend = { port = 9999 } })
+require('ham').setup({ firefox = { manage = false, profile = '' }, backend = { port = 9999 } })
 local ui = require('ham.ui')
 local backend = require('ham.backend')
 

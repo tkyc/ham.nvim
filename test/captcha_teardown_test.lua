@@ -91,6 +91,50 @@ do
   check('backend crash fails the in-flight handler', type(h_last_error) == 'string', true)
 end
 
+-- ── captcha solved, then cancelled while Firefox flips back: resume must NOT re-send ─────
+-- (it used to re-send regardless, so the backend ran an abandoned query — after /clear it
+-- even became the first turn of the "fresh" conversation).
+do
+  local _, id = park_on_captcha({ firefox = { manage = true }, backend = { port = 9999, mode = 'browser' } })
+  local held
+  local orig = firefox.to_headless
+  firefox.to_headless = function(cb) held = cb end -- hold the flip mid-way
+  backend._dispatch({ type = 'captcha_cleared', id = id })
+  backend.abort(id)
+  local queries0 = count_sent('query')
+  held(true) -- the flip finishes after the cancel
+  check('cancel during the post-captcha flip: query not re-sent', count_sent('query') - queries0, 0)
+  firefox.to_headless = orig
+end
+
+-- ── /clear (backend.reset) must also abort an ordinary running query on the backend ─────
+do
+  require('ham').setup({ firefox = { manage = true }, backend = { port = 9999, mode = 'browser' } })
+  backend._dispatch({ type = 'ready' })
+  local id = backend.query('a plain slow question', {})
+  backend.reset()
+  check('reset cancels a running (non-captcha) query on the backend', sent_has('cancel', id), true)
+end
+
+-- ── panel closed while Firefox is still starting: nothing may spawn afterwards ──────────
+do
+  require('ham').setup({ firefox = { manage = true }, backend = { port = 9999, mode = 'browser' } })
+  backend.stop() -- start from a stopped backend
+  local held
+  local orig_ensure, orig_jobstart = firefox.ensure, vim.fn.jobstart
+  firefox.ensure = function(cb) held = cb end -- Firefox still coming up
+  local spawned = 0
+  vim.fn.jobstart = function() spawned = spawned + 1; return -1 end
+  local errored
+  backend.query('asked while starting', { on_error = function(m) errored = m end })
+  backend.stop() -- :Ham close before Firefox is up
+  if held then held(true) end -- Firefox comes up afterwards
+  check('stop during startup: a start was pending', held ~= nil, true)
+  check('stop during startup: backend not spawned afterwards', spawned, 0)
+  check('stop during startup fails the queued query', type(errored) == 'string', true)
+  firefox.ensure, vim.fn.jobstart = orig_ensure, orig_jobstart
+end
+
 if #failures == 0 then
   print('\nALL PASS')
   os.exit(0)

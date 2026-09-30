@@ -5,37 +5,29 @@ local firefox = require('ham.firefox')
 
 local M = {}
 
-local health = vim.health or require('health')
-local h_start = health.start or health.report_start
-local h_ok = health.ok or health.report_ok
-local h_warn = health.warn or health.report_warn
-local h_error = health.error or health.report_error
-
 function M.check()
   local opts = config.options
+  local h = vim.health
+  local h_start, h_ok, h_warn, h_error = h.start, h.ok, h.warn, h.error
 
   h_start('ham')
 
   -- query mode
   local mode = opts.backend.mode or 'http'
   if mode == 'http' then
-    -- Only a dedicated on-disk profile lets queries run with no Firefox at all; on the
-    -- shared default profile every query harvests cookies from a running Firefox, so don't
-    -- claim "Firefox only for login + captcha" there (the cookie line below says as much).
-    if config.uses_disk_cookies() then
+    -- Only a dedicated on-disk profile lets queries run with no Firefox at all (they read
+    -- cookies straight from disk); on the shared default profile every query harvests
+    -- cookies from a running Firefox, so don't claim "Firefox only for login + captcha".
+    local prof = config.dedicated_profile()
+    if prof then
       h_ok('query mode: http (browserless token-chaining fetcher; Firefox only for login + captcha)')
-    else
-      h_ok('query mode: http (browserless token-chaining fetcher; cookies harvested from a running Firefox)')
-    end
-    -- Cookie source: on a dedicated profile, queries read cookies straight from disk.
-    local prof = opts.firefox.profile
-    if prof and prof ~= '' then
       if vim.fn.filereadable(prof .. '/cookies.sqlite') == 1 then
         h_ok('cookies: cookies.sqlite found in profile (no Firefox needed for queries)')
       else
         h_warn('cookies: no cookies.sqlite in ' .. prof, { 'Close the panel (:Ham close), then run  :Ham login  once to sign in.' })
       end
     else
+      h_ok('query mode: http (browserless token-chaining fetcher; cookies harvested from a running Firefox)')
       h_ok('cookies: shared default profile — harvested from a running Firefox')
     end
   elseif mode == 'browser' then

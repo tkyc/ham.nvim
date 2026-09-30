@@ -94,14 +94,18 @@ function M.setup(opts)
   return M.options
 end
 
+-- ham's dedicated Firefox profile dir, or nil when reusing the user's default profile.
+function M.dedicated_profile()
+  local p = M.options.firefox.profile
+  if p and p ~= '' then return p end
+  return nil
+end
+
 -- True when http mode answers queries straight from the dedicated profile's
 -- cookies.sqlite on disk — so no Firefox is needed to start the backend or run
--- queries (Firefox is still launched for :Ham login and captcha solving). Single
--- source of truth for this predicate, used by backend.lua and health.lua.
+-- queries (Firefox is still launched for :Ham login and captcha solving).
 function M.uses_disk_cookies()
-  local o = M.options
-  return o.backend.mode == 'http'
-    and o.firefox.profile ~= nil and o.firefox.profile ~= ''
+  return M.options.backend.mode == 'http' and M.dedicated_profile() ~= nil
 end
 
 return M

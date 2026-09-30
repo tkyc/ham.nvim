@@ -17,6 +17,7 @@
 const BASE = 'https://www.google.com';
 
 const htmlmd = require('./html_markdown');
+const { sleep, abortError } = require('./util');
 // The generic Firefox UA lives in profile_cookies (the module that owns UA derivation);
 // reuse it here as the fallback so the string is defined in exactly one place.
 const FF_UA = require('./profile_cookies').DEFAULT_UA;
@@ -143,10 +144,6 @@ function extractAnswer(html) {
 
 // ---- HTTP -------------------------------------------------------------------
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 function cookieHeader(cookies) {
   if (typeof cookies === 'string') return cookies;
   return (cookies || []).map((c) => `${c.name}=${c.value}`).join('; ');
@@ -203,7 +200,7 @@ async function httpGet(url, ctx, signal) {
     if (err && err.code === 'ECAPTCHA') throw err; // our own /sorry throw — pass through
     // External cancel: re-surface as an AbortError so the backend can tell a user
     // cancel apart from a timeout (and stay silent instead of reporting an error).
-    if (signal && signal.aborted) { const e = new Error('cancelled'); e.name = 'AbortError'; throw e; }
+    if (signal && signal.aborted) throw abortError();
     if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       throw new Error(`AI Mode request timed out after ${Math.round(timeoutMs / 1000)}s`);
     }

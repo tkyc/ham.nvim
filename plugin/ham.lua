@@ -5,12 +5,15 @@ if vim.g.loaded_ham then
 end
 vim.g.loaded_ham = true
 
--- :Ham [open|close|toggle]  — opens the Google AI Mode chat panel.
+-- :Ham [subcommand]  — opens the Google AI Mode chat panel.
+-- :Ham <query>       — asks <query> about your last yank.
 vim.api.nvim_create_user_command('Ham', function(args)
   require('ham')._command(args)
 end, {
   nargs = '?',
-  complete = function(arg_lead)
+  complete = function(arg_lead, cmd_line)
+    -- Only the first word is a subcommand; past it you're typing a free-form query.
+    if cmd_line:match('^%s*%S+%s+%S+%s') then return {} end
     local subs = { 'open', 'close', 'toggle', 'tab', 'login', 'clear', 'retry', 'explain', 'cancel' }
     -- A function `complete` uses customlist semantics: Neovim does NOT filter the
     -- returned list by what's typed, so narrow it to the prefix ourselves.

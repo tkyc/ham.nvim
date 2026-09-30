@@ -44,6 +44,9 @@ M.defaults = {
   -- yank) in plain English. Set to false/'' to disable.
   explain_command = '/explain',
   explain_prompt = 'Explain in plain English. Annotate in a code block with a comment above per line:',
+  -- Slash command that asks your own question about the unnamed register:
+  -- `/ask <question>` (the input-box form of `:Ham <question>`). Set to false/'' to disable.
+  ask_command = '/ask',
 
   -- How ham gets the user's Firefox into debug mode. Firefox's remote agent is
   -- startup-only, so ham (re)launches Firefox with --remote-debugging-port when

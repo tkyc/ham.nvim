@@ -219,8 +219,9 @@ function M.retry()
   send_query(q)
 end
 
--- Explain the unnamed register / last yank (also /explain and :Ham explain).
-function M.explain()
+-- Ask `prompt` about the unnamed register / last yank: the prompt, a blank line, then
+-- the yanked text. `what` names the action in the "nothing yanked" warning.
+local function ask_about_yank(prompt, what)
   if not M.is_open() then M.open() end
   if state.awaiting then
     vim.notify('[ham] still waiting on the previous answer…', vim.log.levels.WARN)
@@ -229,10 +230,26 @@ function M.explain()
   local snippet = (vim.fn.getreg('"') or ''):gsub('%s+$', '')
   clear_input()
   if snippet == '' then
-    vim.notify('[ham] nothing yanked to explain', vim.log.levels.WARN)
+    vim.notify('[ham] nothing yanked to ' .. what, vim.log.levels.WARN)
     return
   end
-  send_query(config.options.explain_prompt .. '\n\n' .. snippet)
+  send_query(prompt .. '\n\n' .. snippet)
+end
+
+-- Explain the unnamed register / last yank (also /explain and :Ham explain).
+function M.explain()
+  ask_about_yank(config.options.explain_prompt, 'explain')
+end
+
+-- Ask your own question about the unnamed register / last yank (:Ham <query> and
+-- /ask <query>).
+function M.ask(query)
+  query = vim.trim(query or '')
+  if query == '' then
+    vim.notify('[ham] usage: ' .. (config.options.ask_command or '/ask') .. ' <question>', vim.log.levels.WARN)
+    return
+  end
+  ask_about_yank(query, 'ask about')
 end
 
 -- Abandon the in-flight query without tearing down the session (also /cancel and
@@ -276,6 +293,12 @@ local function submit()
   if rc and rc ~= '' and text == rc then clear_input(); M.retry(); return end
   local ec = config.options.explain_command
   if ec and ec ~= '' and text == ec then clear_input(); M.explain(); return end
+  -- /ask <question>: the command, then whitespace (a space or newline), then the query.
+  -- Bare "/ask" is caught too so it warns instead of being sent as a literal question.
+  local ac = config.options.ask_command
+  if ac and ac ~= '' and (text == ac or text:match('^' .. vim.pesc(ac) .. '%s')) then
+    clear_input(); M.ask(text:sub(#ac + 1)); return
+  end
   -- /cancel must be handled BEFORE the awaiting guard below (it's the one slash command
   -- whose whole job is to interrupt an in-flight turn).
   local nc = config.options.cancel_command

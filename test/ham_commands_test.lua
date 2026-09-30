@@ -52,6 +52,8 @@ check('completion: "c" -> close,clear,cancel', table.concat(comp('c'), ','), 'cl
 check('completion: "t" -> toggle,tab', table.concat(comp('t'), ','), 'toggle,tab')
 check('completion: empty prefix -> all 9', #comp(''), 9)
 check('completion: no match -> empty', #comp('zzz'), 0)
+-- Past the first word it's a free-form :Ham <query>: no subcommand suggestions.
+check('completion: inside a query -> empty', #comp('what does c'), 0)
 
 check('closed initially', ui.is_open(), false)
 

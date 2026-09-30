@@ -83,6 +83,64 @@ submit('/explain') -- rejected: "still waiting on the previous answer…"
 local input_text = table.concat(vim.api.nvim_buf_get_lines(input.buf, 0, -1, false), '\n')
 check('/explain rejected while awaiting clears the input box', input_text, '')
 check('/explain rejected while awaiting adds no new turn', count_you(), 1)
+
+-- :Ham <query> asks your own question about the yank: query, blank line, yanked text.
+-- Capture what reaches the backend (the stub keeps the turn awaiting, so clear between).
+local sent
+backend.query = function(text) sent = text; return 1 end
+local Ham = function(args) require('ham')._command({ args = args }) end
+
+ui.clear()
+vim.fn.setreg('"', 'SELECT * FROM users;\n')
+Ham('Rewrite this as a Django ORM query')
+check(':Ham <query> sends query + yank', sent, 'Rewrite this as a Django ORM query\n\nSELECT * FROM users;')
+check(':Ham <query> adds a You turn', count_you(), 1)
+check(':Ham <query> keeps the query casing', contains('Django ORM'), true)
+check(':Ham <query> does not use the explain prompt', contains('Explain in plain English'), false)
+
+ui.clear()
+sent = nil
+vim.fn.setreg('"', '')
+Ham('what does this do')
+check(':Ham <query> with empty register sends nothing', sent, nil)
+check(':Ham <query> with empty register adds no turn', count_you(), 0)
+
+-- A query that merely starts with a subcommand word is still a query, not the subcommand.
+ui.clear()
+vim.fn.setreg('"', 'x = 1')
+Ham('explain this in French')
+check(':Ham "explain …" is a query, not :Ham explain', sent, 'explain this in French\n\nx = 1')
+
+-- /ask <query> is the input-box form of :Ham <query>.
+local function input_text()
+  return table.concat(vim.api.nvim_buf_get_lines(input.buf, 0, -1, false), '\n')
+end
+ui.clear()
+sent = nil
+vim.fn.setreg('"', 'def f(): pass\n')
+submit('/ask What Does This Return?')
+check('/ask sends query + yank', sent, 'What Does This Return?\n\ndef f(): pass')
+check('/ask adds a You turn', count_you(), 1)
+check('the literal "/ask" is not shown', contains('/ask'), false)
+check('/ask clears the input box', input_text(), '')
+
+ui.clear()
+sent = nil
+submit('/ask line one\nline two') -- multi-line question typed in the box
+check('/ask keeps a multi-line query', sent, 'line one\nline two\n\ndef f(): pass')
+
+ui.clear()
+sent = nil
+submit('/ask') -- no question: warn, don't send "/ask" as a literal query
+check('bare /ask sends nothing', sent, nil)
+check('bare /ask adds no turn', count_you(), 0)
+check('bare /ask clears the input box', input_text(), '')
+
+ui.clear()
+sent = nil
+submit('/asking for a friend') -- not the /ask command: an ordinary question
+check('"/asking …" is a plain query', sent, '/asking for a friend')
+ui.clear()
 backend.query = orig_query
 
 if #failures == 0 then

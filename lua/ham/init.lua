@@ -35,9 +35,14 @@ function M.login()
   require('ham.firefox').login()
 end
 
+-- :Ham <subcommand> runs that subcommand; any other text is a question about your last
+-- yank (:Ham <query>), sent with its original casing.
 function M._command(args)
-  local sub = (args and args.args or ''):lower()
-  if sub == 'close' then
+  local text = vim.trim(args and args.args or '')
+  local sub = text:lower()
+  if sub == '' or sub == 'open' then
+    ui.open()
+  elseif sub == 'close' then
     ui.close()
   elseif sub == 'toggle' then
     ui.toggle()
@@ -54,7 +59,7 @@ function M._command(args)
   elseif sub == 'cancel' then
     ui.cancel()
   else
-    ui.open()
+    ui.ask(text)
   end
 end
 

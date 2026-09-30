@@ -64,11 +64,18 @@ Then just **`:Ham`** — type your question in the input box and press `<CR>`
 | `:Ham clear` | Wipe the transcript and start a fresh AI Mode conversation |
 | `:Ham retry` | Re-ask your last question |
 | `:Ham explain` | Ask AI Mode to explain the unnamed register (your last `y` yank) |
+| `:Ham <query>` | Ask your own question about the unnamed register, e.g. `:Ham rewrite this in Rust` |
 | `:Ham cancel` | Abandon the in-flight query and free the panel (session stays up) |
 
-The last four also work as **slash commands** typed in the input box —
+Anything that isn't a subcommand is treated as a `<query>`: ham sends it, a blank
+line, then your last yank — like `:Ham explain` with your own prompt in place of
+`explain_prompt`. (A one-word query that matches a subcommand, like `clear`, runs the
+subcommand instead.)
+
+`clear`, `retry`, `explain` and `cancel` also work as **slash commands** typed in the input box —
 `/clear`, `/retry`, `/explain`, `/cancel` — configurable via `clear_command`,
-`retry_command`, `explain_command`, `cancel_command`. (`/cancel` is the one that
+`retry_command`, `explain_command`, `cancel_command`. `:Ham <query>` is
+`/ask <query>` in the input box (`ask_command`). (`/cancel` is the one that
 works *while a query is in flight* — the others wait for it to finish.)
 
 ### Keys (in the panel)
@@ -132,6 +139,7 @@ require('ham').setup({
   cancel_command = '/cancel',
   explain_command = '/explain',
   explain_prompt = 'Explain in plain English. Annotate in a code block with a comment above per line:',
+  ask_command = '/ask',
   firefox = {
     manage = true,          -- let ham launch/restart Firefox
     headless = true,        -- no window (avoids the Wayland occlusion freeze)

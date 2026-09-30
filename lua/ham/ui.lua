@@ -321,6 +321,28 @@ local function apply_win_opts(w, conceal)
   end
 end
 
+-- The chat panel width for the vsplit layout: width_pct of the screen (default 45%),
+-- unless a fixed `width` override is given.
+local function vsplit_width()
+  local split = config.options.split
+  local width = split.width or math.floor(vim.o.columns * (split.width_pct or 45) / 100)
+  return math.max(20, width)
+end
+
+-- Put the panel back to its configured size. Neovim redistributes window sizes
+-- proportionally when the terminal is resized, and that isn't reversible: shrink the
+-- terminal and grow it back and the panel comes out a different width (and the input
+-- box a different height) than it started. Re-applying the configured size after
+-- every resize makes the round trip land exactly where it began.
+local function restore_panel_size()
+  if state.layout == 'vsplit' and win_valid(state.conv_win) then
+    vim.api.nvim_win_set_width(state.conv_win, vsplit_width())
+  end
+  if win_valid(state.input_win) then
+    vim.api.nvim_win_set_height(state.input_win, config.options.split.input_height)
+  end
+end
+
 local function set_keymaps()
   local km = config.options.keymaps
   local function map(buf, mode, lhs, fn)
@@ -385,19 +407,11 @@ function M.open(layout)
     vim.api.nvim_win_set_height(state.input_win, opts.split.input_height)
     apply_win_opts(state.input_win)
   else
-    -- Compute the chat panel width: width_pct of the screen (default 45%), unless a
-    -- fixed `width` override is given.
-    local width = opts.split.width
-    if not width then
-      width = math.floor(vim.o.columns * (opts.split.width_pct or 45) / 100)
-    end
-    width = math.max(20, width)
-
     -- Vertical split to the chosen side; the new window becomes current.
     local split_cmd = opts.split.side == 'left' and 'topleft vsplit' or 'botright vsplit'
     vim.cmd(split_cmd)
     state.conv_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_width(state.conv_win, width)
+    vim.api.nvim_win_set_width(state.conv_win, vsplit_width())
     vim.api.nvim_win_set_buf(state.conv_win, state.conv_buf)
     apply_win_opts(state.conv_win, true)
 
@@ -426,6 +440,26 @@ function M.open(layout)
       local closed = tonumber(ev.match)
       if closed == state.conv_win or closed == state.input_win then
         vim.schedule(M.close)
+      end
+    end,
+  })
+
+  -- Keep the panel at its configured size across terminal resizes. A tabpage that
+  -- isn't current only gets its layout resized when it's next entered, so if the
+  -- panel lives in a background tab, defer the restore until that tab is entered.
+  local resize_pending = false
+  local function panel_in_current_tab()
+    return win_valid(state.conv_win)
+      and vim.api.nvim_win_get_tabpage(state.conv_win) == vim.api.nvim_get_current_tabpage()
+  end
+  vim.api.nvim_create_autocmd({ 'VimResized', 'TabEnter' }, {
+    group = state.augroup,
+    callback = function(ev)
+      if open_generation ~= gen then return true end -- superseded panel → drop this autocmd
+      if ev.event == 'VimResized' then resize_pending = true end
+      if resize_pending and panel_in_current_tab() then
+        resize_pending = false
+        restore_panel_size()
       end
     end,
   })

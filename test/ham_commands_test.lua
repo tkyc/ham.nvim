@@ -233,6 +233,40 @@ check('split.layout=tab: panel open', ui.is_open(), true)
 Ham('close')
 config.options.split.layout = 'vsplit' -- restore default for any later assertions
 
+-- Terminal resize: Neovim redistributes window sizes proportionally, so shrinking the
+-- terminal and growing it back leaves the panel the wrong size. After VimResized the
+-- panel must snap back to its configured width / input height. (Headless has no real
+-- terminal to resize, so knock the sizes off by hand and fire the event.)
+local function panel_wins()
+  local conv, input
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local ft = vim.bo[vim.api.nvim_win_get_buf(w)].filetype
+    if ft == 'markdown' then conv = w elseif ft == 'ham-input' then input = w end
+  end
+  return conv, input
+end
+local want_width = math.max(20, math.floor(vim.o.columns * config.options.split.width_pct / 100))
+
+Ham('')
+local conv_w, input_w = panel_wins()
+check('vsplit opens at the configured width', vim.api.nvim_win_get_width(conv_w), want_width)
+vim.api.nvim_win_set_width(conv_w, want_width + 10)
+vim.api.nvim_win_set_height(input_w, config.options.split.input_height + 4)
+vim.api.nvim_exec_autocmds('VimResized', {})
+check('VimResized restores the panel width', vim.api.nvim_win_get_width(conv_w), want_width)
+check('VimResized restores the input height', vim.api.nvim_win_get_height(input_w), config.options.split.input_height)
+
+-- Resized while the panel's tab is in the background: restore once it's re-entered.
+local panel_tab = vim.api.nvim_get_current_tabpage()
+vim.cmd('tabnew')
+vim.api.nvim_win_set_width(conv_w, want_width + 10)
+vim.api.nvim_exec_autocmds('VimResized', {})
+check('background resize leaves the panel alone', vim.api.nvim_win_get_width(conv_w), want_width + 10)
+vim.api.nvim_set_current_tabpage(panel_tab)
+check('re-entering the tab restores the width', vim.api.nvim_win_get_width(conv_w), want_width)
+vim.cmd('tabonly')
+Ham('close')
+
 if #failures == 0 then
   print('\nALL PASS')
   os.exit(0)
